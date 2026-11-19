@@ -9,6 +9,7 @@ import sqlite3
 import shutil
 import subprocess
 import tempfile
+from tkinter import _test
 import cv2
 import numpy as np
 
@@ -38,11 +39,35 @@ cv2.setNumThreads(4)
 APP_NAME = "KRONOS PRO"
 APP_VERSION = "1.0.0"
 APP_SUBTITLE = "Tactical Video & Match Intelligence"
+
+
+def gerar_icone_app_k(tamanho=256):
+    """Cria o ícone da aplicação com um K estilizado."""
+    pixmap = QPixmap(tamanho, tamanho)
+    pixmap.fill(QColor("#050508"))
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    gradient = QLinearGradient(0, 0, tamanho, tamanho)
+    gradient.setColorAt(0.0, QColor("#38BDF8"))
+    gradient.setColorAt(1.0, QColor("#0284C7"))
+    painter.setPen(QPen(QBrush(gradient), max(12, tamanho // 12)))
+
+    margem = tamanho // 4
+    painter.drawLine(margem, margem, margem, tamanho - margem)
+    painter.drawLine(margem, tamanho // 2, tamanho - margem, margem)
+    painter.drawLine(margem, tamanho // 2, tamanho - margem, tamanho - margem)
+
+    painter.end()
+    return QIcon(pixmap)
+
+
 import urllib.request
 import zipfile
 import stat
 
-UPDATE_MANIFEST_URL = "https://github.com/SEU_UTILIZADOR/kronos-pro/releases/latest/download/latest.json"
+UPDATE_MANIFEST_URL = "https://github.com/brenhagustavo-maker/Kronos_Pro/releases/latest/download/latest.json"
 
 STYLESHEET = """
 QMainWindow, QWidget {
@@ -282,6 +307,7 @@ class AtivacaoLicencaDialog(QDialog):
         self.setWindowTitle(f"{APP_NAME} — Ativação de Licença")
         self.setFixedSize(430, 320)
         self.setStyleSheet(STYLESHEET)
+        self.setWindowIcon(KronosProQtApp.gerar_icone_app_k(128))
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 20, 22, 20)
@@ -2344,6 +2370,8 @@ class KronosProQtApp(QMainWindow):
                 clip = self.studio_clips[self.idx_clip_studio]
                 t_alvo = self.studio_tempo_atual if (clip["inicio"] <= self.studio_tempo_atual <= clip["fim"]) else clip["inicio"]
                 self.media_player.setPosition(int(t_alvo * 1000))
+        elif idx == 2:
+            self.desenhar_heatmap_espacial()
 
     def sincronizar_dicionarios_internos(self):
         self.momentos_jogo.clear()
@@ -2464,6 +2492,43 @@ class KronosProQtApp(QMainWindow):
         h_layout.addWidget(btn_ajuda)
 
         parent_layout.addWidget(header)
+
+    @staticmethod
+    def gerar_icone_app_k(tamanho=128):
+        pix = QPixmap(tamanho, tamanho)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        ox, oy = tamanho * 0.08, tamanho * 0.08
+        tam = tamanho * 0.84
+
+        grad = QLinearGradient(ox, oy, ox + tam, oy + tam)
+        grad.setColorAt(0.0, QColor("#38BDF8"))
+        grad.setColorAt(0.5, QColor("#0284C7"))
+        grad.setColorAt(1.0, QColor("#0F172A"))
+
+        escudo = QPolygonF([
+            QPointF(ox + tam * 0.50, oy + tam * 0.03),
+            QPointF(ox + tam * 0.95, oy + tam * 0.26),
+            QPointF(ox + tam * 0.84, oy + tam * 0.95),
+            QPointF(ox + tam * 0.50, oy + tam * 0.81),
+            QPointF(ox + tam * 0.16, oy + tam * 0.95),
+            QPointF(ox + tam * 0.05, oy + tam * 0.26)
+        ])
+        p.setBrush(QBrush(grad))
+        p.setPen(QPen(QColor("#7DD3FC"), max(1.5, tamanho * 0.035)))
+        p.drawPolygon(escudo)
+
+        p.setPen(QPen(QColor("#F59E0B"), max(2.2, tamanho * 0.065), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.drawLine(QPointF(ox + tam * 0.34, oy + tam * 0.27), QPointF(ox + tam * 0.34, oy + tam * 0.69))
+
+        p.setPen(QPen(QColor("#FFFFFF"), max(2.0, tamanho * 0.055), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.drawLine(QPointF(ox + tam * 0.68, oy + tam * 0.27), QPointF(ox + tam * 0.41, oy + tam * 0.48))
+        p.drawLine(QPointF(ox + tam * 0.41, oy + tam * 0.48), QPointF(ox + tam * 0.68, oy + tam * 0.69))
+
+        p.end()
+        return QIcon(pix)
 
     def abrir_menu_suporte(self):
         status, dias_rest, est = self.lic_mgr.verificar_validade()
@@ -4464,6 +4529,7 @@ class KronosProQtApp(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setWindowIcon(gerar_icone_app_k(256))
     lic_mgr = LicenseManager()
     estado_lic, dias_rest, _ = lic_mgr.verificar_validade()
 
