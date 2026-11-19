@@ -1,0 +1,31 @@
+name: Gerar KRONOS PRO para Windows
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Ir buscar o codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar ferramentas da app
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyQt6 opencv-python-headless numpy pyinstaller
+
+      - name: Compilar KRONOS PRO.exe com icone
+        run: |
+          pyinstaller --noconfirm --windowed --icon kronos_icon.ico --name "KRONOS PRO" sportscode_mvp.py
+
+      - name: Disponibilizar ficheiro para transferir
+        uses: actions/upload-artifact@v4
+        with:
+          name: KRONOS-PRO-Windows
+          path: dist/KRONOS PRO/
