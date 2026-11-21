@@ -4,12 +4,12 @@ import csv
 import json
 import math
 import time
+import copy
 import platform
 import sqlite3
 import shutil
 import subprocess
 import tempfile
-from tkinter import _test
 import cv2
 import numpy as np
 
@@ -37,7 +37,7 @@ cv2.setUseOptimized(True)
 cv2.setNumThreads(4)
 
 APP_NAME = "KRONOS PRO"
-APP_VERSION = "1.0.0"
+APP_VERSION = "0.9.0-beta.1"
 APP_SUBTITLE = "Tactical Video & Match Intelligence"
 
 
@@ -62,12 +62,6 @@ def gerar_icone_app_k(tamanho=256):
     painter.end()
     return QIcon(pixmap)
 
-
-import urllib.request
-import zipfile
-import stat
-
-UPDATE_MANIFEST_URL = "https://github.com/brenhagustavo-maker/Kronos_Pro/releases/latest/download/latest.json"
 
 STYLESHEET = """
 QMainWindow, QWidget {
@@ -243,17 +237,50 @@ QSlider::handle:horizontal {
     border-radius: 6px;
 }
 QSplitter::handle {
-    background-color: #09090D;
-    border: 1px solid #181822;
+    background-color: #162033;
+    border: 1px solid #263449;
 }
 QSplitter::handle:horizontal {
-    width: 6px;
+    width: 10px;
 }
 QSplitter::handle:vertical {
-    height: 6px;
+    height: 10px;
 }
 QSplitter::handle:hover {
     background-color: #38BDF8;
+    border-color: #7DD3FC;
+}
+QScrollBar:vertical {
+    background-color: #070B12;
+    width: 11px;
+    margin: 2px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background-color: #0EA5E9;
+    min-height: 28px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical:hover {
+    background-color: #7DD3FC;
+}
+QScrollBar::horizontal {
+    background-color: #070B12;
+    height: 11px;
+    margin: 2px;
+    border-radius: 5px;
+}
+QScrollBar::handle:horizontal {
+    background-color: #0EA5E9;
+    min-width: 28px;
+    border-radius: 5px;
+}
+QScrollBar::handle:horizontal:hover {
+    background-color: #7DD3FC;
+}
+QScrollBar::add-line, QScrollBar::sub-line {
+    width: 0px;
+    height: 0px;
 }
 """
 
@@ -371,7 +398,7 @@ class AtivacaoLicencaDialog(QDialog):
 class VectorLogoWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.setFixedSize(235, 44)
+        self.setFixedSize(295, 44)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -420,10 +447,10 @@ class VectorLogoWidget(QWidget):
         p.drawText(rect_pro, Qt.AlignmentFlag.AlignCenter, "PRO")
 
         p.setPen(QColor("#38BDF8"))
-        f_sub = QFont("Helvetica Neue", 8, QFont.Weight.Bold)
-        f_sub.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)
+        f_sub = QFont("Helvetica Neue", 7, QFont.Weight.Bold)
+        f_sub.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.8)
         p.setFont(f_sub)
-        p.drawText(QPointF(50.0, 36.5), "PERFORMANCE SUITE")
+        p.drawText(QPointF(50.0, 36.5), APP_SUBTITLE.upper())
 
 
 # =============================================================================
@@ -547,9 +574,6 @@ class TacticalDatabase:
         return dict(self.cursor.fetchall())
 
 
-# =============================================================================
-# WORKER DE OTIMIZAÇÃO INTEGRADA DE VÍDEO (FFMPEG MP4 H.264)
-# =============================================================================
 class VideoOptimizeWorker(QThread):
     progresso = pyqtSignal(str)
     concluido = pyqtSignal(str)
@@ -583,9 +607,6 @@ class VideoOptimizeWorker(QThread):
             self.erro.emit(str(e))
 
 
-# =============================================================================
-# SUBJANELA DE CORTES POR GRUPO
-# =============================================================================
 class SubjanelaCortesGrupoDialog(QDialog):
     def __init__(self, app_ref, nome_grupo, cor_hex):
         super().__init__(app_ref)
@@ -680,9 +701,6 @@ class SubjanelaCortesGrupoDialog(QDialog):
         self.accept()
 
 
-# =============================================================================
-# DIÁLOGO DE CONFIGURAÇÃO DE ATIVAÇÃO E PRÉ/PÓS CORTE (CLIQUE DIREITO)
-# =============================================================================
 class ConfigurarModoCorteBotaoDialog(QDialog):
     OPCOES_INDIVIDUAIS = [
         ("Ao Clique (Inicia ou Termina no Clique)", "clique"),
@@ -860,10 +878,9 @@ class ConfigurarModoCorteBotaoDialog(QDialog):
         self.accept()
 
 
-# =============================================================================
-# WIDGET DE BOTÃO NA TELA LIVRE
-# =============================================================================
 class DraggableCodeWidget(QWidget):
+    MARGEM_BORDA = 7
+
     def __init__(self, canvas_parent, item_dict, app_ref):
         super().__init__(canvas_parent)
         self.canvas = canvas_parent
@@ -875,6 +892,50 @@ class DraggableCodeWidget(QWidget):
         self.pos_inicial_rato = QPoint()
         self.geom_inicial = QRect()
         self.setMouseTracking(True)
+
+    def _detetar_zona_redimensionamento(self, pos):
+        x, y, w, h = pos.x(), pos.y(), self.width(), self.height()
+        esq = x <= self.MARGEM_BORDA
+        dir_ = x >= w - self.MARGEM_BORDA
+        cima = y <= self.MARGEM_BORDA
+        baixo = y >= h - self.MARGEM_BORDA
+
+        if cima and esq:
+            return "top_left"
+        if cima and dir_:
+            return "top_right"
+        if baixo and esq:
+            return "bottom_left"
+        if baixo and dir_:
+            return "bottom_right"
+        if esq:
+            return "left"
+        if dir_:
+            return "right"
+        if cima:
+            return "top"
+        if baixo:
+            return "bottom"
+        return "move"
+
+    def _cursor_para_zona(self, zona):
+        mapa = {
+            "left": Qt.CursorShape.SizeHorCursor,
+            "right": Qt.CursorShape.SizeHorCursor,
+            "top": Qt.CursorShape.SizeVerCursor,
+            "bottom": Qt.CursorShape.SizeVerCursor,
+            "top_left": Qt.CursorShape.SizeFDiagCursor,
+            "bottom_right": Qt.CursorShape.SizeFDiagCursor,
+            "top_right": Qt.CursorShape.SizeBDiagCursor,
+            "bottom_left": Qt.CursorShape.SizeBDiagCursor,
+        }
+        return mapa.get(zona, Qt.CursorShape.SizeAllCursor)
+
+    def _calcular_tamanho_fonte_dinamico(self):
+        base_f = float(self.item.get("fonte", 11))
+        fator_alt = max(0.65, min(1.45, self.height() / 36.0))
+        fator_larg = max(0.70, min(1.25, self.width() / 140.0))
+        return max(7, min(28, int(round(base_f * min(fator_alt, fator_larg)))))
 
     def obter_resumo_modo_corte(self):
         if self.item["tipo"] not in ("momento", "acao"):
@@ -897,22 +958,8 @@ class DraggableCodeWidget(QWidget):
         tipo = self.item["tipo"]
 
         if tipo == "minicampo":
-            p.fillRect(QRectF(0, 0, w, h), QColor("#042217"))
-            p.setPen(QPen(QColor("#059669"), 1.0, Qt.PenStyle.DashLine))
-            for c in range(1, 6):
-                x = (w / 6.0) * c
-                p.drawLine(QPointF(x, 0), QPointF(x, h))
-            for r in range(1, 3):
-                y = (h / 3.0) * r
-                p.drawLine(QPointF(0, y), QPointF(w, y))
-
-            p.setPen(QPen(QColor("#E2E8F0"), 1.4))
-            p.drawRect(QRectF(1.0, 1.0, w - 2.0, h - 2.0))
-            p.drawLine(QPointF(w / 2.0, 0), QPointF(w / 2.0, h))
-            raio_c = min(w, h) * 0.14
-            p.drawEllipse(QPointF(w / 2.0, h / 2.0), raio_c, raio_c)
-            p.drawRect(QRectF(1.0, h * 0.2, w * 0.14, h * 0.6))
-            p.drawRect(QRectF(w - w * 0.14 - 1.0, h * 0.2, w * 0.14, h * 0.6))
+            mod = getattr(self.app, "modalidade_atual", "futebol")
+            self.app._desenhar_campo_por_modalidade(p, mod, QRectF(1.0, 1.0, w - 2.0, h - 2.0), mostrar_zonas=True)
 
             px = self.app.coord_campo_atual[0] * w
             py = self.app.coord_campo_atual[1] * h
@@ -921,7 +968,7 @@ class DraggableCodeWidget(QWidget):
             p.drawEllipse(QPointF(px, py), 6.0, 6.0)
 
             p.setPen(QColor("#FDE047"))
-            p.setFont(QFont("Helvetica Neue", 9, QFont.Weight.Bold))
+            p.setFont(QFont("Helvetica Neue", max(7, int(min(11, h * 0.07))), QFont.Weight.Bold))
             p.drawText(QPointF(6.0, h - 5.0), self.app.zona_campo_atual)
         else:
             cor_base = QColor(self.item.get("cor", "#0284C7"))
@@ -940,8 +987,11 @@ class DraggableCodeWidget(QWidget):
             grad_btn.setColorAt(1.0, cor_base.darker(115))
             p.setBrush(QBrush(grad_btn))
 
+            selecionado = (getattr(self.canvas, "widget_selecionado", None) is self)
             if ativo:
                 p.setPen(QPen(QColor("#FDE047"), 2.5))
+            elif selecionado and self.canvas.modo_edicao:
+                p.setPen(QPen(QColor("#F97316"), 2.5))
             else:
                 p.setPen(QPen(QColor(255, 255, 255, 65), 1.0))
             p.drawRoundedRect(QRectF(1.0, 1.0, w - 2.0, h - 2.0), raio, raio)
@@ -950,7 +1000,8 @@ class DraggableCodeWidget(QWidget):
                 p.fillRect(QRectF(8.0, 3.0, w - 16.0, 2.0), QColor(255, 255, 255, 150))
 
             p.setPen(QColor("#FFFFFF"))
-            fnt = QFont("Helvetica Neue", self.item.get("fonte", 11), QFont.Weight.Bold)
+            tam_f = self._calcular_tamanho_fonte_dinamico()
+            fnt = QFont("Helvetica Neue", tam_f, QFont.Weight.Bold)
             p.setFont(fnt)
 
             txt = nome
@@ -962,91 +1013,111 @@ class DraggableCodeWidget(QWidget):
             if tipo in ("momento", "acao") and h >= 32:
                 p.drawText(QRectF(4.0, 1.0, w - 8.0, h - 11.0), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, txt)
                 p.setPen(QColor(255, 255, 255, 175))
-                p.setFont(QFont("SF Mono", 7, QFont.Weight.Bold))
+                p.setFont(QFont("SF Mono", max(6, int(tam_f * 0.65)), QFont.Weight.Bold))
                 p.drawText(QRectF(4.0, h - 12.0, w - 8.0, 11.0), Qt.AlignmentFlag.AlignCenter, self.obter_resumo_modo_corte())
             else:
                 p.drawText(QRectF(4.0, 2.0, w - 8.0, h - 4.0), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, txt)
 
         if self.canvas.modo_edicao:
+            selecionado = (getattr(self.canvas, "widget_selecionado", None) is self)
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(QColor("#38BDF8"), 1.5, Qt.PenStyle.DashLine))
+            p.setPen(QPen(QColor("#F97316" if selecionado else "#38BDF8"), 1.8 if selecionado else 1.5, Qt.PenStyle.DashLine))
             p.drawRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0))
 
-            pol_handle = QPolygonF([
-                QPointF(w - 14.0, h),
-                QPointF(w, h),
-                QPointF(w, h - 14.0)
-            ])
             p.setBrush(QBrush(QColor("#38BDF8")))
             p.setPen(Qt.PenStyle.NoPen)
-            p.drawPolygon(pol_handle)
+            m = 6.0
+            for px_m, py_m in [
+                (0.0, 0.0), (w - m, 0.0), (0.0, h - m), (w - m, h - m),
+                (w / 2.0 - m / 2.0, 0.0), (w / 2.0 - m / 2.0, h - m),
+                (0.0, h / 2.0 - m / 2.0), (w - m, h / 2.0 - m / 2.0)
+            ]:
+                p.drawRect(QRectF(px_m, py_m, m, m))
 
     def contextMenuEvent(self, event):
         if self.item["tipo"] != "minicampo":
             self.abrir_menu_contexto(event.globalPos())
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.RightButton:
-            if self.item["tipo"] != "minicampo":
-                self.abrir_menu_contexto(event.globalPosition().toPoint())
-            return
-
-        if self.canvas.modo_edicao and event.button() == Qt.MouseButton.LeftButton:
-            pos = event.position().toPoint()
-            self.pos_inicial_rato = event.globalPosition().toPoint()
-            self.geom_inicial = self.geometry()
-            if pos.x() >= self.width() - 16 and pos.y() >= self.height() - 16:
-                self.modo_arrasto = "redimensionar"
-            else:
-                self.modo_arrasto = "mover"
-            self.raise_()
-            return
-
         if event.button() == Qt.MouseButton.LeftButton:
+            self.canvas.selecionar_widget(self)
+            if self.canvas.modo_edicao:
+                self.app.registar_historico_codigo()
+                self.modo_arrasto = self._detetar_zona_redimensionamento(event.position().toPoint())
+                self.pos_inicial_rato = event.globalPosition().toPoint()
+                self.geom_inicial = self.geometry()
+                self.raise_()
+                self.update()
+                event.accept()
+                return
+
             tipo = self.item["tipo"]
             if tipo == "minicampo":
                 nx = max(0.0, min(1.0, event.position().x() / max(1, self.width())))
                 ny = max(0.0, min(1.0, event.position().y() / max(1, self.height())))
-                col = min(5, int(nx * 6))
-                row = min(2, int(ny * 3))
-                num_z = col * 3 + row + 1
-                corredores = ["Corredor Esq", "Corredor Central", "Corredor Dir"]
-                self.app.ao_selecionar_zona_campo(f"Zona {num_z} ({corredores[row]})", (round(nx, 3), round(ny, 3)), corredores[row])
+                mod = getattr(self.app, "modalidade_atual", "futebol")
+                if mod == "voleibol":
+                    zona_v, corr_v = self.app._calcular_zona_voleibol(nx, ny)
+                    self.app.ao_selecionar_zona_campo(zona_v, (round(nx, 3), round(ny, 3)), corr_v)
+                elif mod == "basquetebol":
+                    zona_b, corr_b = self.app._calcular_zona_basquetebol(nx, ny)
+                    self.app.ao_selecionar_zona_campo(zona_b, (round(nx, 3), round(ny, 3)), corr_b)
+                elif mod == "andebol":
+                    zona_a, corr_a = self.app._calcular_zona_andebol(nx, ny)
+                    self.app.ao_selecionar_zona_campo(zona_a, (round(nx, 3), round(ny, 3)), corr_a)
+                else:
+                    col = min(5, int(nx * 6))
+                    row = min(2, int(ny * 3))
+                    num_z = col * 3 + row + 1
+                    corredores = ["Corredor Esq", "Corredor Central", "Corredor Dir"]
+                    self.app.ao_selecionar_zona_campo(f"Zona {num_z} ({corredores[row]})", (round(nx, 3), round(ny, 3)), corredores[row])
                 self.update()
             elif tipo in ("momento", "acao"):
                 self.app.acionar_item_codificacao(self.item)
             elif tipo == "label":
                 self.app.toggle_label(self.item["nome"])
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if not self.canvas.modo_edicao:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             return
 
-        pos = event.position().toPoint()
         if not self.modo_arrasto:
-            if pos.x() >= self.width() - 16 and pos.y() >= self.height() - 16:
-                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-            else:
-                self.setCursor(Qt.CursorShape.SizeAllCursor)
+            zona_hover = self._detetar_zona_redimensionamento(event.position().toPoint())
+            self.setCursor(self._cursor_para_zona(zona_hover))
             return
 
         delta = event.globalPosition().toPoint() - self.pos_inicial_rato
-        grid = 8
+        dx, dy = delta.x(), delta.y()
+        min_w = 110 if self.item["tipo"] == "minicampo" else 48
+        min_h = 70 if self.item["tipo"] == "minicampo" else 24
 
-        if self.modo_arrasto == "mover":
-            nx = max(4, round((self.geom_inicial.x() + delta.x()) / grid) * grid)
-            ny = max(4, round((self.geom_inicial.y() + delta.y()) / grid) * grid)
-            self.move(nx, ny)
-            self.item["x"], self.item["y"] = nx, ny
-            self.canvas.ajustar_tamanho_minimo_tela()
-        elif self.modo_arrasto == "redimensionar":
-            nw = max(48, round((self.geom_inicial.width() + delta.x()) / grid) * grid)
-            nh = max(24, round((self.geom_inicial.height() + delta.y()) / grid) * grid)
-            self.resize(nw, nh)
-            self.item["w"], self.item["h"] = nw, nh
-            self.canvas.ajustar_tamanho_minimo_tela()
+        g = self.geom_inicial
+        x, y, w, h = g.x(), g.y(), g.width(), g.height()
 
+        if self.modo_arrasto == "move":
+            x = max(0, x + dx)
+            y = max(0, y + dy)
+        else:
+            if "right" in self.modo_arrasto:
+                w = max(min_w, w + dx)
+            if "bottom" in self.modo_arrasto:
+                h = max(min_h, h + dy)
+            if "left" in self.modo_arrasto:
+                novo_w = max(min_w, w - dx)
+                x = max(0, x + (w - novo_w))
+                w = novo_w
+            if "top" in self.modo_arrasto:
+                novo_h = max(min_h, h - dy)
+                y = max(0, y + (h - novo_h))
+                h = novo_h
+
+        self.setGeometry(x, y, w, h)
+        self.item["x"], self.item["y"], self.item["w"], self.item["h"] = x, y, w, h
+        self.canvas.ajustar_tamanho_minimo_tela()
         self.update()
 
     def mouseReleaseEvent(self, event):
@@ -1116,6 +1187,7 @@ class FreeformCodeCanvas(QWidget):
         self.app = app_ref
         self.modo_edicao = False
         self.widgets_itens = []
+        self.widget_selecionado = None
         self.setMinimumSize(290, 640)
 
     def paintEvent(self, event):
@@ -1129,16 +1201,40 @@ class FreeformCodeCanvas(QWidget):
                 for y in range(8, self.height(), passo):
                     p.drawPoint(x, y)
 
-            p.setPen(QColor("#38BDF8"))
-            p.setFont(QFont("Helvetica Neue", 9, QFont.Weight.Bold))
-            p.drawText(8, 14, "EDIÇÃO LIVRE: Arraste p/ mover | Canto inf. direito estica")
+    def selecionar_widget(self, w_alvo):
+        self.widget_selecionado = w_alvo
+        self.atualizar_visual_todos()
+
+    def mover_selecionado_teclado(self, dx, dy):
+        w = self.widget_selecionado
+        if w is None or w not in self.widgets_itens:
+            return
+        self.app.registar_historico_codigo()
+        nx = max(0, w.x() + dx)
+        ny = max(0, w.y() + dy)
+        w.move(nx, ny)
+        w.item["x"], w.item["y"] = nx, ny
+        self.ajustar_tamanho_minimo_tela()
+        w.update()
+
+    def apagar_selecionado_teclado(self):
+        w = self.widget_selecionado
+        if w is None or w not in self.widgets_itens:
+            return
+        item_alvo = w.item
+        self.widget_selecionado = None
+        self.eliminar_item(item_alvo)
 
     def reconstruir_widgets(self):
         for w in self.widgets_itens:
+            w.setParent(None)
             w.deleteLater()
         self.widgets_itens.clear()
+        self.widget_selecionado = None
 
         for item in self.app.layout_items:
+            if getattr(self.app, "campo_oculto", False) and item.get("tipo") == "minicampo":
+                continue
             w = DraggableCodeWidget(self, item, self.app)
             w.show()
             self.widgets_itens.append(w)
@@ -1155,27 +1251,33 @@ class FreeformCodeCanvas(QWidget):
         max_x = 280
         max_y = 600
         for it in self.app.layout_items:
+            if getattr(self.app, "campo_oculto", False) and it.get("tipo") == "minicampo":
+                continue
             max_x = max(max_x, it["x"] + it["w"] + 20)
             max_y = max(max_y, it["y"] + it["h"] + 30)
         self.setMinimumSize(max_x, max_y)
 
     def adicionar_novo_item(self, tipo):
-        y_livre = 30
-        for it in self.app.layout_items:
-            y_livre = max(y_livre, it["y"] + it["h"] + 8)
+        self.app.registar_historico_codigo()
+        scroll_h = self.app.scroll_canvas.verticalScrollBar().value() if hasattr(self.app, "scroll_canvas") else 0
+        x_livre = 20 + (len(self.app.layout_items) * 7) % 120
+        y_livre = scroll_h + 24 + (len(self.app.layout_items) * 11) % 180
 
         if tipo == "momento":
-            novo = {"tipo": "momento", "nome": "Novo Momento", "atalho": "6", "cor": "#0D9488", "x": 12, "y": y_livre, "w": 256, "h": 36, "fonte": 11, "raio": 5, "pre_tipo": "clique", "pre_val": 0.0, "pos_tipo": "clique", "pos_val": 0.0}
+            novo = {"tipo": "momento", "nome": "Novo Momento", "atalho": "6", "cor": "#0D9488", "x": x_livre, "y": y_livre, "w": 256, "h": 36, "fonte": 11, "raio": 5, "pre_tipo": "clique", "pre_val": 0.0, "pos_tipo": "clique", "pos_val": 0.0}
         elif tipo == "acao":
-            novo = {"tipo": "acao", "nome": "Nova Ação", "atalho": "z", "cor": "#E11D48", "x": 12, "y": y_livre, "w": 124, "h": 44, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 10.0, "pos_tipo": "segundos", "pos_val": 10.0}
+            novo = {"tipo": "acao", "nome": "Nova Ação", "atalho": "z", "cor": "#E11D48", "x": x_livre, "y": y_livre, "w": 124, "h": 44, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 10.0, "pos_tipo": "segundos", "pos_val": 10.0}
         else:
-            novo = {"tipo": "label", "nome": "Nova Etiqueta", "atalho": "", "cor": "#14141D", "x": 12, "y": y_livre, "w": 82, "h": 28, "fonte": 10, "raio": 4}
+            novo = {"tipo": "label", "nome": "Nova Etiqueta", "atalho": "", "cor": "#14141D", "x": x_livre, "y": y_livre, "w": 82, "h": 28, "fonte": 10, "raio": 4}
 
         self.app.layout_items.append(novo)
         self.reconstruir_widgets()
+        if self.widgets_itens:
+            self.selecionar_widget(self.widgets_itens[-1])
         self.app.sincronizar_estruturas_desde_canvas()
 
     def duplicar_item(self, item_orig):
+        self.app.registar_historico_codigo()
         copia = dict(item_orig)
         copia["nome"] = item_orig["nome"] + " (2)"
         copia["x"] = item_orig["x"] + 16
@@ -1186,14 +1288,34 @@ class FreeformCodeCanvas(QWidget):
 
     def eliminar_item(self, item_alvo):
         if item_alvo in self.app.layout_items:
+            self.app.registar_historico_codigo()
             self.app.layout_items.remove(item_alvo)
             self.reconstruir_widgets()
             self.app.sincronizar_estruturas_desde_canvas()
 
+    def descartar_campo(self):
+        self.app.registar_historico_codigo()
+        self.app.campo_oculto = True
+        self.app.layout_items = [it for it in self.app.layout_items if it.get("tipo") != "minicampo"]
+        self.reconstruir_widgets()
+        self.app.sincronizar_estruturas_desde_canvas()
 
-# =============================================================================
-# TIMELINE DE ALTA PERFORMANCE E NITIDEZ RETINA (MATCH DESK)
-# =============================================================================
+    def repor_campo(self):
+        self.app.registar_historico_codigo()
+        self.app.campo_oculto = False
+        if not any(it.get("tipo") == "minicampo" for it in self.app.layout_items):
+            mod = getattr(self.app, "modalidade_atual", "futebol")
+            nomes_campo = {
+                "voleibol": "Campo Voleibol (Zonas 1-6)",
+                "basquetebol": "Court Basquetebol",
+                "andebol": "Campo Andebol (6m / 9m)",
+                "futebol": "Campo 18 Zonas"
+            }
+            self.app.layout_items.insert(0, {"tipo": "minicampo", "nome": nomes_campo.get(mod, "Campo 18 Zonas"), "x": 12, "y": 10, "w": 256, "h": 134})
+        self.reconstruir_widgets()
+        self.app.sincronizar_estruturas_desde_canvas()
+
+
 class TimelineWidget(QWidget):
     def __init__(self, app_ref):
         super().__init__()
@@ -1493,9 +1615,8 @@ class TimelineWidget(QWidget):
         if self.modo_interacao:
             self.app.db.sincronizar_lista(self.app.eventos_registados)
         self.modo_interacao = None
-        # =============================================================================
-# WORKER DE EXPORTAÇÃO DE VÍDEO
-# =============================================================================
+
+
 class VideoExportWorker(QThread):
     progresso = pyqtSignal(int, str)
     concluido = pyqtSignal(str)
@@ -1504,7 +1625,7 @@ class VideoExportWorker(QThread):
     def __init__(self, app_ref, caminho_video, clips, caminho_saida, usar_title_card, usar_minimapa, usar_mask_3d, fps, modo_rapido_ffmpeg=False):
         super().__init__()
         self.app = app_ref
-        self.caminho_video = ""
+        self.caminho_video = caminho_video
         self.clips = clips
         self.caminho_saida = caminho_saida
         self.usar_title_card = usar_title_card
@@ -1653,9 +1774,6 @@ class VideoExportWorker(QThread):
         self.concluido.emit(self.caminho_saida)
 
 
-# =============================================================================
-# TIMELINE NLE DO VISION STUDIO (ESTILO IMOVIE: CORTE DIVIDIDO + SKIMMING RAM)
-# =============================================================================
 class StudioNLETimelineWidget(QWidget):
     def __init__(self, app_ref):
         super().__init__()
@@ -1766,12 +1884,10 @@ class StudioNLETimelineWidget(QWidget):
                 p.setFont(QFont("Helvetica Neue", 9, QFont.Weight.Bold))
                 p.drawText(rect_kf.adjusted(3, 0, -6, 0), Qt.AlignmentFlag.AlignCenter, f"P{k_idx+1}\n{kf['duracao']:.1f}s")
 
-        # Agulha Branca Definitiva
         x_play = self.tempo_para_x(self.app.studio_tempo_atual)
         p.setPen(QPen(QColor("#FFFFFF"), 2.2))
         p.drawLine(QPointF(x_play, 4.0), QPointF(x_play, h - 4.0))
 
-        # Agulha Vermelha de Skimming (Temporária)
         if self.hover_x is not None:
             p.setPen(QPen(QColor("#EF4444"), 1.6))
             p.drawLine(QPointF(self.hover_x, 0.0), QPointF(self.hover_x, h))
@@ -1839,7 +1955,6 @@ class StudioNLETimelineWidget(QWidget):
         self.app.atualizar_lista_keyframes_ui()
 
     def leaveEvent(self, event):
-        """Ao sair da timeline, regressa imediatamente ao fotograma/efeito em edição ou ao último clique."""
         self.hover_x = None
         if self.app.idx_clip_studio is not None and self.app.media_player.playbackState() != QMediaPlayer.PlaybackState.PlayingState:
             em_edicao = (
@@ -1856,9 +1971,6 @@ class StudioNLETimelineWidget(QWidget):
         super().leaveEvent(event)
 
 
-# =============================================================================
-# EDITOR DE TEXTO RICO DENTRO DO VISION STUDIO
-# =============================================================================
 class EditarTextoTaticoDialog(QDialog):
     def __init__(self, parent, dados_existentes=None):
         super().__init__(parent)
@@ -1969,9 +2081,6 @@ class EditarTextoTaticoDialog(QDialog):
         }
 
 
-# =============================================================================
-# CANVAS INTERATIVO COM LASER 120HZ, HOMOGRAFIA, TEXTO E LUPA 2.0X ARRASTÁVEL
-# =============================================================================
 class StudioCanvasWidget(QLabel):
     def __init__(self, app_ref):
         super().__init__()
@@ -2224,9 +2333,6 @@ class StudioCanvasWidget(QLabel):
         self.setCursor(Qt.CursorShape.CrossCursor)
 
 
-# =============================================================================
-# APLICAÇÃO PRINCIPAL KRONOS PRO
-# =============================================================================
 class KronosProQtApp(QMainWindow):
     def __init__(self, lic_mgr=None):
         super().__init__()
@@ -2274,6 +2380,70 @@ class KronosProQtApp(QMainWindow):
             {"tipo": "label", "nome": "Negativo", "atalho": "", "cor": "#14141D", "x": 99, "y": 552, "w": 82, "h": 28, "fonte": 10, "raio": 4},
             {"tipo": "label", "nome": "Golo", "atalho": "", "cor": "#14141D", "x": 186, "y": 552, "w": 82, "h": 28, "fonte": 10, "raio": 4}
         ]
+
+        self.historico_codigo_undo = []
+        self.historico_codigo_redo = []
+        self.campo_oculto = False
+
+        self.modalidade_atual = "futebol"
+        self.presets_modalidades = {
+            "futebol": copy.deepcopy(self.layout_items),
+            "voleibol": [
+                {"tipo": "minicampo", "nome": "Campo Voleibol (Zonas 1-9)", "x": 12, "y": 10, "w": 256, "h": 134},
+                {"tipo": "momento", "nome": "Rali em Curso", "atalho": "1", "cor": "#0284C7", "x": 12, "y": 154, "w": 256, "h": 34, "fonte": 11, "raio": 5, "pre_tipo": "segundos", "pre_val": 1.0, "pos_tipo": "clique", "pos_val": 0.0},
+                {"tipo": "acao", "nome": "Serviço", "atalho": "s", "cor": "#0284C7", "x": 12, "y": 196, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 2.0, "pos_tipo": "segundos", "pos_val": 3.0},
+                {"tipo": "acao", "nome": "Receção", "atalho": "r", "cor": "#059669", "x": 144, "y": 196, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 2.0, "pos_tipo": "segundos", "pos_val": 3.0},
+                {"tipo": "acao", "nome": "Ataque", "atalho": "a", "cor": "#E11D48", "x": 12, "y": 244, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 2.0, "pos_tipo": "segundos", "pos_val": 3.0},
+                {"tipo": "acao", "nome": "Bloco", "atalho": "b", "cor": "#7C3AED", "x": 144, "y": 244, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 2.0, "pos_tipo": "segundos", "pos_val": 3.0},
+                {"tipo": "acao", "nome": "Defesa", "atalho": "d", "cor": "#D97706", "x": 12, "y": 292, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 2.0, "pos_tipo": "segundos", "pos_val": 3.0},
+                {"tipo": "acao", "nome": "Ponto / Erro", "atalho": "p", "cor": "#16A34A", "x": 144, "y": 292, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 2.0, "pos_tipo": "segundos", "pos_val": 3.0},
+                # Botões de Zona 1 a 9 (alinhados em 3x3)
+                {"tipo": "label", "nome": "Zona 5", "atalho": "", "cor": "#14141D", "x": 12, "y": 344, "w": 82, "h": 26, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Zona 7", "atalho": "", "cor": "#14141D", "x": 99, "y": 344, "w": 82, "h": 26, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Zona 4", "atalho": "", "cor": "#14141D", "x": 186, "y": 344, "w": 82, "h": 26, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Zona 6", "atalho": "", "cor": "#14141D", "x": 12, "y": 374, "w": 82, "h": 26, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Zona 8", "atalho": "", "cor": "#14141D", "x": 99, "y": 374, "w": 82, "h": 26, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Zona 3", "atalho": "", "cor": "#14141D", "x": 186, "y": 374, "w": 82, "h": 26, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Zona 1", "atalho": "", "cor": "#14141D", "x": 12, "y": 404, "w": 82, "h": 26, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Zona 9", "atalho": "", "cor": "#14141D", "x": 99, "y": 404, "w": 82, "h": 26, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Zona 2", "atalho": "", "cor": "#14141D", "x": 186, "y": 404, "w": 82, "h": 26, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Positivo", "atalho": "", "cor": "#14141D", "x": 12, "y": 438, "w": 124, "h": 28, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Erro / Negativo", "atalho": "", "cor": "#14141D", "x": 144, "y": 438, "w": 124, "h": 28, "fonte": 10, "raio": 4}
+            ],
+            "basquetebol": [
+                {"tipo": "minicampo", "nome": "Court Basquetebol", "x": 12, "y": 10, "w": 256, "h": 134},
+                {"tipo": "momento", "nome": "Ataque Organizado", "atalho": "1", "cor": "#0284C7", "x": 12, "y": 154, "w": 256, "h": 34, "fonte": 11, "raio": 5, "pre_tipo": "clique", "pre_val": 0.0, "pos_tipo": "clique", "pos_val": 0.0},
+                {"tipo": "momento", "nome": "Defesa / Transição", "atalho": "2", "cor": "#D97706", "x": 12, "y": 192, "w": 256, "h": 34, "fonte": 11, "raio": 5, "pre_tipo": "clique", "pre_val": 0.0, "pos_tipo": "clique", "pos_val": 0.0},
+                {"tipo": "acao", "nome": "Lançamento 2P", "atalho": "q", "cor": "#059669", "x": 12, "y": 236, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 3.0, "pos_tipo": "segundos", "pos_val": 2.0},
+                {"tipo": "acao", "nome": "Triplo (3P)", "atalho": "t", "cor": "#E11D48", "x": 144, "y": 236, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 3.0, "pos_tipo": "segundos", "pos_val": 2.0},
+                {"tipo": "acao", "nome": "Perda Bola (TO)", "atalho": "o", "cor": "#EA580C", "x": 12, "y": 284, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 3.0, "pos_tipo": "segundos", "pos_val": 3.0},
+                {"tipo": "acao", "nome": "Ressalto", "atalho": "r", "cor": "#7C3AED", "x": 144, "y": 284, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 2.0, "pos_tipo": "segundos", "pos_val": 2.0},
+                {"tipo": "acao", "nome": "Bloqueio / Roubo", "atalho": "b", "cor": "#2563EB", "x": 12, "y": 332, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 3.0, "pos_tipo": "segundos", "pos_val": 2.0},
+                {"tipo": "acao", "nome": "Falta / LL", "atalho": "f", "cor": "#CA8A04", "x": 144, "y": 332, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 2.0, "pos_tipo": "segundos", "pos_val": 3.0},
+                {"tipo": "label", "nome": "Garrafão", "atalho": "", "cor": "#14141D", "x": 12, "y": 384, "w": 82, "h": 28, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Ala / 3P", "atalho": "", "cor": "#14141D", "x": 99, "y": 384, "w": 82, "h": 28, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Topo / Chave", "atalho": "", "cor": "#14141D", "x": 186, "y": 384, "w": 82, "h": 28, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Convertido", "atalho": "", "cor": "#14141D", "x": 12, "y": 418, "w": 124, "h": 28, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Falhado", "atalho": "", "cor": "#14141D", "x": 144, "y": 418, "w": 124, "h": 28, "fonte": 10, "raio": 4}
+            ],
+            "andebol": [
+                {"tipo": "minicampo", "nome": "Campo Andebol (6m / 9m)", "x": 12, "y": 10, "w": 256, "h": 134},
+                {"tipo": "momento", "nome": "Ataque Posicional", "atalho": "1", "cor": "#0284C7", "x": 12, "y": 154, "w": 256, "h": 34, "fonte": 11, "raio": 5, "pre_tipo": "clique", "pre_val": 0.0, "pos_tipo": "clique", "pos_val": 0.0},
+                {"tipo": "momento", "nome": "Defesa / Recuo", "atalho": "2", "cor": "#D97706", "x": 12, "y": 192, "w": 256, "h": 34, "fonte": 11, "raio": 5, "pre_tipo": "clique", "pre_val": 0.0, "pos_tipo": "clique", "pos_val": 0.0},
+                {"tipo": "acao", "nome": "Remate 6m / Ponta", "atalho": "a", "cor": "#E11D48", "x": 12, "y": 236, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 3.0, "pos_tipo": "segundos", "pos_val": 2.0},
+                {"tipo": "acao", "nome": "Remate 9m / Susp.", "atalho": "w", "cor": "#7C3AED", "x": 144, "y": 236, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 3.0, "pos_tipo": "segundos", "pos_val": 2.0},
+                {"tipo": "acao", "nome": "Contra-Ataque", "atalho": "c", "cor": "#059669", "x": 12, "y": 284, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 2.0, "pos_tipo": "segundos", "pos_val": 3.0},
+                {"tipo": "acao", "nome": "Perda / Falta Téc.", "atalho": "t", "cor": "#EA580C", "x": 144, "y": 284, "w": 124, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 2.0, "pos_tipo": "segundos", "pos_val": 2.0},
+                {"tipo": "acao", "nome": "Livre 7m / Exclusão", "atalho": "e", "cor": "#CA8A04", "x": 12, "y": 332, "w": 256, "h": 42, "fonte": 11, "raio": 6, "pre_tipo": "segundos", "pre_val": 2.0, "pos_tipo": "segundos", "pos_val": 3.0},
+                {"tipo": "label", "nome": "Ponta Esq", "atalho": "", "cor": "#14141D", "x": 12, "y": 384, "w": 124, "h": 28, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Ponta Dir", "atalho": "", "cor": "#14141D", "x": 144, "y": 384, "w": 124, "h": 28, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Lateral Esq", "atalho": "", "cor": "#14141D", "x": 12, "y": 418, "w": 82, "h": 28, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Central / Pivot", "atalho": "", "cor": "#14141D", "x": 99, "y": 418, "w": 82, "h": 28, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Lateral Dir", "atalho": "", "cor": "#14141D", "x": 186, "y": 418, "w": 82, "h": 28, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Golo", "atalho": "", "cor": "#14141D", "x": 12, "y": 452, "w": 124, "h": 28, "fonte": 10, "raio": 4},
+                {"tipo": "label", "nome": "Defesa GR / Fora", "atalho": "", "cor": "#14141D", "x": 144, "y": 452, "w": 124, "h": 28, "fonte": 10, "raio": 4}
+            ]
+        }
 
         self.momentos_jogo = {}
         self.categorias_eventos = {}
@@ -2374,6 +2544,9 @@ class KronosProQtApp(QMainWindow):
             self.desenhar_heatmap_espacial()
 
     def sincronizar_dicionarios_internos(self):
+        if not hasattr(self, "campo_oculto"):
+            self.campo_oculto = False
+
         self.momentos_jogo.clear()
         self.categorias_eventos.clear()
         self.todas_pistas.clear()
@@ -2389,18 +2562,78 @@ class KronosProQtApp(QMainWindow):
             elif it["tipo"] == "label":
                 self.lista_labels.append(it["nome"])
 
-    def sincronizar_estruturas_desde_canvas(self):
-        self.sincronizar_dicionarios_internos()
-        self.reconstruir_conteudo_painel_direito()
+    def _atualizar_ui_apos_edicao_canvas(self):
         if hasattr(self, "combo_heatmap"):
             self.combo_heatmap.blockSignals(True)
             self.combo_heatmap.clear()
             self.combo_heatmap.addItems(["Todas as Ações"] + list(self.todas_pistas.keys()))
             self.combo_heatmap.blockSignals(False)
-        self.atualizar_dashboard()
-        self.timeline_widget.update()
+        if hasattr(self, "combo_etiqueta_spatial"):
+            self.combo_etiqueta_spatial.blockSignals(True)
+            self.combo_etiqueta_spatial.clear()
+            self.combo_etiqueta_spatial.addItems(["Todas as Etiquetas"] + list(self.lista_labels))
+            self.combo_etiqueta_spatial.blockSignals(False)
+        if hasattr(self, "layout_grupos_dinamico") and hasattr(self, "dash_labels"):
+            self.reconstruir_conteudo_painel_direito()
+        if hasattr(self, "dash_labels"):
+            self.atualizar_dashboard()
+        if hasattr(self, "timeline_widget"):
+            self.timeline_widget.update()
+
+    def sincronizar_estruturas_desde_canvas(self):
+        self.sincronizar_dicionarios_internos()
+        QTimer.singleShot(0, self._atualizar_ui_apos_edicao_canvas)
+
+    def descartar_campo_canvas(self):
+        if hasattr(self, "freeform_canvas") and self.freeform_canvas is not None:
+            self.freeform_canvas.descartar_campo()
+
+    def repor_campo_canvas(self):
+        if hasattr(self, "freeform_canvas") and self.freeform_canvas is not None:
+            self.freeform_canvas.repor_campo()
+
+    def _aplicar_estado_historico_codigo(self):
+        if getattr(self, "freeform_canvas", None) is not None:
+            self.freeform_canvas.widget_selecionado = None
+            for w in getattr(self, "freeform_canvas", []).widgets_itens:
+                w.modo_arrasto = None
+            self.freeform_canvas.reconstruir_widgets()
+        self.sincronizar_estruturas_desde_canvas()
+
+    def registar_historico_codigo(self):
+        if not hasattr(self, "historico_codigo_undo"):
+            self.historico_codigo_undo = []
+        if not hasattr(self, "historico_codigo_redo"):
+            self.historico_codigo_redo = []
+        self.historico_codigo_undo.append(copy.deepcopy(self.layout_items))
+        if len(self.historico_codigo_undo) > 50:
+            self.historico_codigo_undo.pop(0)
+        self.historico_codigo_redo.clear()
+
+    def desfazer_janela_codigo(self):
+        if not getattr(self, "historico_codigo_undo", None):
+            return
+        if not hasattr(self, "historico_codigo_redo"):
+            self.historico_codigo_redo = []
+        self.historico_codigo_redo.append(copy.deepcopy(self.layout_items))
+        self.layout_items = self.historico_codigo_undo.pop()
+        self.campo_oculto = not any(it.get("tipo") == "minicampo" for it in self.layout_items)
+        QTimer.singleShot(0, self._aplicar_estado_historico_codigo)
+
+    def refazer_janela_codigo(self):
+        if not getattr(self, "historico_codigo_redo", None):
+            return
+        if not hasattr(self, "historico_codigo_undo"):
+            self.historico_codigo_undo = []
+        self.historico_codigo_undo.append(copy.deepcopy(self.layout_items))
+        self.layout_items = self.historico_codigo_redo.pop()
+        self.campo_oculto = not any(it.get("tipo") == "minicampo" for it in self.layout_items)
+        QTimer.singleShot(0, self._aplicar_estado_historico_codigo)
 
     def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Resize and obj is getattr(self, "painel_direito", None):
+            self.atualizar_escala_grupos_contadores()
+
         if event.type() == QEvent.Type.KeyPress:
             foco = QApplication.focusWidget()
             if isinstance(foco, (QLineEdit, QTextEdit, QSpinBox, QDoubleSpinBox)):
@@ -2408,6 +2641,24 @@ class KronosProQtApp(QMainWindow):
 
             key = event.key()
             mods = event.modifiers()
+
+            if getattr(self, "freeform_canvas", None) and self.freeform_canvas.modo_edicao and self.freeform_canvas.widget_selecionado is not None:
+                passo = 10 if (mods & Qt.KeyboardModifier.ShiftModifier) else 1
+                if key == Qt.Key.Key_Left:
+                    self.freeform_canvas.mover_selecionado_teclado(-passo, 0)
+                    return True
+                elif key == Qt.Key.Key_Right:
+                    self.freeform_canvas.mover_selecionado_teclado(passo, 0)
+                    return True
+                elif key == Qt.Key.Key_Up:
+                    self.freeform_canvas.mover_selecionado_teclado(0, -passo)
+                    return True
+                elif key == Qt.Key.Key_Down:
+                    self.freeform_canvas.mover_selecionado_teclado(0, passo)
+                    return True
+                elif key == Qt.Key.Key_Backspace:
+                    self.freeform_canvas.apagar_selecionado_teclado()
+                    return True
 
             if self.tabs.currentIndex() == 0:
                 if key == Qt.Key.Key_Left:
@@ -2463,6 +2714,16 @@ class KronosProQtApp(QMainWindow):
         self.logo_widget = VectorLogoWidget()
         h_layout.addWidget(self.logo_widget)
 
+        h_layout.addSpacing(12)
+        h_layout.addWidget(QLabel("<span style='color:#94A3B8; font-size:11px; font-weight:bold;'>MODALIDADE:</span>"))
+        self.combo_modalidade = QComboBox()
+        self.combo_modalidade.addItem("Futebol", "futebol")
+        self.combo_modalidade.addItem("Voleibol", "voleibol")
+        self.combo_modalidade.addItem("Basquetebol", "basquetebol")
+        self.combo_modalidade.addItem("Andebol", "andebol")
+        self.combo_modalidade.currentIndexChanged.connect(self.ao_alterar_modalidade)
+        h_layout.addWidget(self.combo_modalidade)
+
         h_layout.addStretch()
 
         self.btn_modo_livre = QPushButton("Personalizar Match Desk")
@@ -2492,6 +2753,288 @@ class KronosProQtApp(QMainWindow):
         h_layout.addWidget(btn_ajuda)
 
         parent_layout.addWidget(header)
+
+    def ao_alterar_modalidade(self, idx):
+        if not hasattr(self, "combo_modalidade"):
+            return
+        nova_mod = self.combo_modalidade.itemData(idx)
+        if not nova_mod or nova_mod == getattr(self, "modalidade_atual", "futebol"):
+            return
+
+        if hasattr(self, "modalidade_atual") and hasattr(self, "presets_modalidades"):
+            self.presets_modalidades[self.modalidade_atual] = copy.deepcopy(self.layout_items)
+
+        self.modalidade_atual = nova_mod
+        self.momento_ativo = None
+        self.acoes_em_gravacao.clear()
+        self.labels_ativas.clear()
+        self.coord_campo_atual = (0.5, 0.5)
+        zonas_padrao = {
+            "voleibol": "Zona 6 (Fora 3m)",
+            "basquetebol": "Topo / Chave",
+            "andebol": "Central / Pivot",
+            "futebol": "Zona 8 (Corredor Central)"
+        }
+        self.zona_campo_atual = zonas_padrao.get(nova_mod, "Zona 8 (Corredor Central)")
+
+        if nova_mod in self.presets_modalidades:
+            self.layout_items = copy.deepcopy(self.presets_modalidades[nova_mod])
+        self.campo_oculto = not any(it.get("tipo") == "minicampo" for it in self.layout_items)
+
+        if hasattr(self, "freeform_canvas"):
+            self.freeform_canvas.widget_selecionado = None
+            self.freeform_canvas.reconstruir_widgets()
+        self.sincronizar_estruturas_desde_canvas()
+        if self.tabs.currentIndex() == 2:
+            self.desenhar_heatmap_espacial()
+
+    @staticmethod
+    def _calcular_zona_voleibol(nx, ny):
+        col_6 = min(5, int(max(0.0, min(0.9999, nx)) * 6.0))
+        row_3 = min(2, int(max(0.0, min(0.9999, ny)) * 3.0))
+
+        layout_6x3 = [
+            [5, 7, 4, 2, 9, 1],
+            [6, 8, 3, 3, 8, 6],
+            [1, 9, 2, 4, 7, 5],
+        ]
+        zona_num = layout_6x3[row_3][col_6]
+        return f"Zona {zona_num}", f"Zona {zona_num}"
+
+    @staticmethod
+    def _calcular_zona_basquetebol(nx, ny):
+        # Devolve sempre uma das etiquetas exatas do preset de basquetebol:
+        # "Garrafão", "Ala / 3P" ou "Topo / Chave"
+        na_area = (nx < 0.22 or nx > 0.78) and (0.30 <= ny <= 0.70)
+        if na_area:
+            return "Garrafão", "Garrafão"
+        if ny < 0.28 or ny > 0.72:
+            return "Ala / 3P", "Ala / 3P"
+        return "Topo / Chave", "Topo / Chave"
+
+    @staticmethod
+    def _calcular_zona_andebol(nx, ny):
+        # Espelho dividido pela linha do meio-campo (nx = 0.5):
+        # Metade esquerda (nx < 0.5): Ponta Esq -> Lateral Esq -> Central / Pivot -> Lateral Dir -> Ponta Dir
+        # Metade direita (nx >= 0.5): espelhado (Ponta Dir -> Lateral Dir -> Central / Pivot -> Lateral Esq -> Ponta Esq)
+        if nx < 0.5:
+            if ny < 0.18:
+                zona_btn = "Ponta Esq"
+            elif ny < 0.36:
+                zona_btn = "Lateral Esq"
+            elif ny > 0.82:
+                zona_btn = "Ponta Dir"
+            elif ny > 0.64:
+                zona_btn = "Lateral Dir"
+            else:
+                zona_btn = "Central / Pivot"
+        else:
+            if ny < 0.18:
+                zona_btn = "Ponta Dir"
+            elif ny < 0.36:
+                zona_btn = "Lateral Dir"
+            elif ny > 0.82:
+                zona_btn = "Ponta Esq"
+            elif ny > 0.64:
+                zona_btn = "Lateral Esq"
+            else:
+                zona_btn = "Central / Pivot"
+
+        return zona_btn, zona_btn
+
+    @staticmethod
+    def _desenhar_campo_por_modalidade(p, mod, rect_f, mostrar_zonas=True):
+        x0, y0, w, h = rect_f.x(), rect_f.y(), rect_f.width(), rect_f.height()
+        x1, y1 = x0 + w, y0 + h
+        cx, cy = x0 + w / 2.0, y0 + h / 2.0
+
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setClipRect(rect_f.adjusted(-2.0, -2.0, 2.0, 2.0))
+
+        if mod == "voleibol":
+            row_h = h / 3.0
+            col_w = w / 6.0
+
+            # Fundo geral fora dos 3m (azul-marinho profundo) e faixas dos 3m junto à rede
+            p.fillRect(rect_f, QColor("#0F294A"))
+            p.fillRect(QRectF(x0 + 2.0 * col_w, y0, col_w, h), QColor("#134E6F"))
+            p.fillRect(QRectF(x0 + 3.0 * col_w, y0, col_w, h), QColor("#134E6F"))
+
+            # Grelha de zonas (linhas horizontais e divisórias verticais, sem números nas células)
+            if mostrar_zonas:
+                p.setPen(QPen(QColor(148, 163, 184, 110), 1.0, Qt.PenStyle.DashLine))
+                for r in range(1, 3):
+                    zy = y0 + row_h * r
+                    p.drawLine(QPointF(x0, zy), QPointF(x1, zy))
+                for c_div in [1, 2, 4, 5]:
+                    zx = x0 + c_div * col_w
+                    p.drawLine(QPointF(zx, y0), QPointF(zx, y1))
+
+            # Linhas dos 3 metros junto à rede em cada lado
+            p.setPen(QPen(QColor("#38BDF8"), 1.6))
+            p.drawLine(QPointF(x0 + 2.0 * col_w, y0), QPointF(x0 + 2.0 * col_w, y1))
+            p.drawLine(QPointF(x0 + 4.0 * col_w, y0), QPointF(x0 + 4.0 * col_w, y1))
+
+            # Contorno exterior e rede central
+            p.setPen(QPen(QColor("#E2E8F0"), 1.6))
+            p.drawRect(rect_f)
+
+            p.setPen(QPen(QColor("#F59E0B"), 2.4))
+            p.drawLine(QPointF(cx, y0 - 2.0), QPointF(cx, y1 + 2.0))
+
+        elif mod == "basquetebol":
+            p.fillRect(rect_f, QColor("#2A170E"))
+            p.setPen(QPen(QColor(255, 255, 255, 18), 1.0))
+            n_tabuas = max(8, int(h // 8))
+            for i_t in range(1, n_tabuas):
+                yt = y0 + (h / n_tabuas) * i_t
+                p.drawLine(QPointF(x0, yt), QPointF(x1, yt))
+
+            ga_w = w * (5.80 / 28.0)
+            ga_h = h * (4.90 / 15.0)
+            ga_y0 = cy - ga_h / 2.0
+            p.fillRect(QRectF(x0, ga_y0, ga_w, ga_h), QColor(2, 132, 199, 95))
+            p.fillRect(QRectF(x1 - ga_w, ga_y0, ga_w, ga_h), QColor(2, 132, 199, 95))
+
+            r_circ_x = max(12.0, w * (1.80 / 28.0))
+            r_circ_y = max(12.0, h * (1.80 / 15.0))
+            p.setBrush(QBrush(QColor(56, 189, 248, 35)))
+            p.setPen(QPen(QColor("#E2E8F0"), 1.5))
+            p.drawEllipse(QPointF(cx, cy), r_circ_x, r_circ_y)
+
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor("#F8FAFC"), 1.6))
+            p.drawRect(rect_f)
+            p.drawLine(QPointF(cx, y0), QPointF(cx, y1))
+
+            p.drawRect(QRectF(x0, ga_y0, ga_w, ga_h))
+            p.drawRect(QRectF(x1 - ga_w, ga_y0, ga_w, ga_h))
+            p.drawEllipse(QPointF(x0 + ga_w, cy), r_circ_x, r_circ_y)
+            p.drawEllipse(QPointF(x1 - ga_w, cy), r_circ_x, r_circ_y)
+
+            tab_x_e = x0 + w * (1.20 / 28.0)
+            tab_x_d = x1 - w * (1.20 / 28.0)
+            tab_h = h * (1.80 / 15.0)
+            p.setPen(QPen(QColor("#FFFFFF"), 2.0))
+            p.drawLine(QPointF(tab_x_e, cy - tab_h / 2.0), QPointF(tab_x_e, cy + tab_h / 2.0))
+            p.drawLine(QPointF(tab_x_d, cy - tab_h / 2.0), QPointF(tab_x_d, cy + tab_h / 2.0))
+
+            cesto_x_e = x0 + w * (1.575 / 28.0)
+            cesto_x_d = x1 - w * (1.575 / 28.0)
+            p.setPen(QPen(QColor("#F59E0B"), 2.0))
+            p.drawEllipse(QPointF(cesto_x_e, cy), 3.5, 3.5)
+            p.drawEllipse(QPointF(cesto_x_d, cy), 3.5, 3.5)
+
+            canto_y = h * (0.90 / 15.0)
+            rx_3p = w * (7.20 / 28.0)
+            ry_3p = h * (6.75 / 15.0)
+            y_3p_sup = y0 + canto_y
+            y_3p_inf = y1 - canto_y
+            dy_c = cy - y_3p_sup
+            dx_arco = math.sqrt(max(0.0, 1.0 - (dy_c / max(1.0, ry_3p)) ** 2)) * rx_3p
+            ang_deg = math.degrees(math.atan2(dy_c, max(1.0, dx_arco)))
+
+            p.setPen(QPen(QColor("#38BDF8"), 1.6))
+            path_e = QPainterPath(QPointF(x0, y_3p_sup))
+            path_e.lineTo(QPointF(cesto_x_e + dx_arco, y_3p_sup))
+            path_e.arcTo(QRectF(cesto_x_e - rx_3p, cy - ry_3p, 2.0 * rx_3p, 2.0 * ry_3p), ang_deg, -2.0 * ang_deg)
+            path_e.lineTo(QPointF(x0, y_3p_inf))
+            p.drawPath(path_e)
+
+            path_d = QPainterPath(QPointF(x1, y_3p_sup))
+            path_d.lineTo(QPointF(cesto_x_d - dx_arco, y_3p_sup))
+            path_d.arcTo(QRectF(cesto_x_d - rx_3p, cy - ry_3p, 2.0 * rx_3p, 2.0 * ry_3p), 180.0 - ang_deg, 2.0 * ang_deg)
+            path_d.lineTo(QPointF(x1, y_3p_inf))
+            p.drawPath(path_d)
+
+        elif mod == "andebol":
+            p.fillRect(rect_f, QColor("#122B3A"))
+            p.setPen(QPen(QColor("#F8FAFC"), 1.6))
+            p.drawRect(rect_f)
+
+            p.drawLine(QPointF(cx, y0), QPointF(cx, y1))
+            r_centro = h * (2.0 / 20.0)
+            p.drawEllipse(QPointF(cx, cy), r_centro, r_centro)
+
+            bal_h = h * (3.0 / 20.0)
+            poste_sup = cy - bal_h / 2.0
+            poste_inf = cy + bal_h / 2.0
+            p.setPen(QPen(QColor("#38BDF8"), 2.4))
+            p.drawLine(QPointF(x0, poste_sup), QPointF(x0, poste_inf))
+            p.drawLine(QPointF(x1, poste_sup), QPointF(x1, poste_inf))
+
+            p.save()
+            p.setClipRect(rect_f, Qt.ClipOperation.IntersectClip)
+
+            reto_6m_x = w * (6.0 / 40.0)
+            r6_x = w * (6.0 / 40.0)
+            r6_y = h * (6.0 / 20.0)
+            p.setPen(QPen(QColor("#FFFFFF"), 1.6))
+
+            path_6m_e = QPainterPath(QPointF(x0, poste_sup - r6_y))
+            path_6m_e.arcTo(QRectF(x0 - r6_x, poste_sup - r6_y, 2.0 * r6_x, 2.0 * r6_y), 90.0, -90.0)
+            path_6m_e.lineTo(QPointF(x0 + reto_6m_x, poste_inf))
+            path_6m_e.arcTo(QRectF(x0 - r6_x, poste_inf - r6_y, 2.0 * r6_x, 2.0 * r6_y), 0.0, -90.0)
+            p.drawPath(path_6m_e)
+
+            path_6m_d = QPainterPath(QPointF(x1, poste_sup - r6_y))
+            path_6m_d.arcTo(QRectF(x1 - r6_x, poste_sup - r6_y, 2.0 * r6_x, 2.0 * r6_y), 90.0, 90.0)
+            path_6m_d.lineTo(QPointF(x1 - reto_6m_x, poste_inf))
+            path_6m_d.arcTo(QRectF(x1 - r6_x, poste_inf - r6_y, 2.0 * r6_x, 2.0 * r6_y), 180.0, 90.0)
+            p.drawPath(path_6m_d)
+
+            reto_9m_x = w * (9.0 / 40.0)
+            r9_x = w * (9.0 / 40.0)
+            r9_y = h * (9.0 / 20.0)
+            p.setPen(QPen(QColor("#F59E0B"), 1.4, Qt.PenStyle.DashLine))
+
+            path_9m_e = QPainterPath(QPointF(x0, poste_sup - r9_y))
+            path_9m_e.arcTo(QRectF(x0 - r9_x, poste_sup - r9_y, 2.0 * r9_x, 2.0 * r9_y), 90.0, -90.0)
+            path_9m_e.lineTo(QPointF(x0 + reto_9m_x, poste_inf))
+            path_9m_e.arcTo(QRectF(x0 - r9_x, poste_inf - r9_y, 2.0 * r9_x, 2.0 * r9_y), 0.0, -90.0)
+            p.drawPath(path_9m_e)
+
+            path_9m_d = QPainterPath(QPointF(x1, poste_sup - r9_y))
+            path_9m_d.arcTo(QRectF(x1 - r9_x, poste_sup - r9_y, 2.0 * r9_x, 2.0 * r9_y), 90.0, 90.0)
+            path_9m_d.lineTo(QPointF(x1 - reto_9m_x, poste_inf))
+            path_9m_d.arcTo(QRectF(x1 - r9_x, poste_inf - r9_y, 2.0 * r9_x, 2.0 * r9_y), 180.0, 90.0)
+            p.drawPath(path_9m_d)
+
+            p.restore()
+
+            l7_x_e = x0 + w * (7.0 / 40.0)
+            l7_x_d = x1 - w * (7.0 / 40.0)
+            l7_meio = max(3.0, h * (0.5 / 20.0))
+            p.setPen(QPen(QColor("#FDE047"), 1.6))
+            p.drawLine(QPointF(l7_x_e, cy - l7_meio), QPointF(l7_x_e, cy + l7_meio))
+            p.drawLine(QPointF(l7_x_d, cy - l7_meio), QPointF(l7_x_d, cy + l7_meio))
+
+            l4_x_e = x0 + w * (4.0 / 40.0)
+            l4_x_d = x1 - w * (4.0 / 40.0)
+            p.drawLine(QPointF(l4_x_e, cy - 2.0), QPointF(l4_x_e, cy + 2.0))
+            p.drawLine(QPointF(l4_x_d, cy - 2.0), QPointF(l4_x_d, cy + 2.0))
+
+        else:
+            p.fillRect(rect_f, QColor("#042217"))
+            if mostrar_zonas:
+                p.setPen(QPen(QColor("#059669"), 1.0, Qt.PenStyle.DashLine))
+                for c in range(1, 6):
+                    zx = x0 + (w / 6.0) * c
+                    p.drawLine(QPointF(zx, y0), QPointF(zx, y1))
+                for r in range(1, 3):
+                    zy = y0 + (h / 3.0) * r
+                    p.drawLine(QPointF(x0, zy), QPointF(x1, zy))
+
+            p.setPen(QPen(QColor("#E2E8F0"), 1.4))
+            p.drawRect(rect_f)
+            p.drawLine(QPointF(cx, y0), QPointF(cx, y1))
+            raio_c = min(w, h) * 0.14
+            p.drawEllipse(QPointF(cx, cy), raio_c, raio_c)
+            p.drawRect(QRectF(x0, y0 + h * 0.2, w * 0.14, h * 0.6))
+            p.drawRect(QRectF(x1 - w * 0.14, y0 + h * 0.2, w * 0.14, h * 0.6))
+
+        p.restore()
 
     @staticmethod
     def gerar_icone_app_k(tamanho=128):
@@ -2535,6 +3078,7 @@ class KronosProQtApp(QMainWindow):
         email_lic = est.get("email", "Não ativado") if est else "Não ativado"
         info_diag = (
             f"Aplicação: {APP_NAME} v{APP_VERSION}\n"
+            f"Modalidade: {getattr(self, 'modalidade_atual', 'futebol')}\n"
             f"Sistema: {platform.system()} {platform.release()} ({platform.machine()})\n"
             f"Licença: {email_lic} (Estado: {status}, {dias_rest} dias offline restantes)\n"
             f"Vídeo ativo: {os.path.basename(self.caminho_video) if self.caminho_video else 'Nenhum'}"
@@ -2577,16 +3121,24 @@ class KronosProQtApp(QMainWindow):
         QMessageBox.information(self, "Vídeo Otimizado", f"Vídeo convertido e carregado com sucesso:\n{novo_caminho}")
 
     def alternar_modo_edicao_canvas(self):
+        if not hasattr(self, "freeform_canvas") or self.freeform_canvas is None:
+            return
         ativo = not self.freeform_canvas.modo_edicao
         self.freeform_canvas.modo_edicao = ativo
-        self.barra_ferramentas_canvas.setVisible(ativo)
+        if hasattr(self, "barra_ferramentas_canvas") and self.barra_ferramentas_canvas is not None:
+            self.barra_ferramentas_canvas.setVisible(ativo)
         if ativo:
             self.btn_modo_livre.setText("Concluir Edição do Match Desk")
             self.btn_modo_livre.setObjectName("WarnBtn")
         else:
             self.btn_modo_livre.setText("Personalizar Match Desk")
             self.btn_modo_livre.setObjectName("AccentBtn")
-        self.btn_modo_livre.setStyle(self.btn_modo_livre.style())
+            self.freeform_canvas.widget_selecionado = None
+        estilo = self.btn_modo_livre.style()
+        if estilo is not None:
+            estilo.unpolish(self.btn_modo_livre)
+            estilo.polish(self.btn_modo_livre)
+        self.btn_modo_livre.update()
         self.freeform_canvas.atualizar_visual_todos()
 
     def alternar_visibilidade_codigo(self):
@@ -2605,9 +3157,6 @@ class KronosProQtApp(QMainWindow):
         else:
             self.ciclar_velocidade()
 
-    # =========================================================================
-    # SEPARADOR 1: MATCH DESK
-    # =========================================================================
     def configurar_tab_codificacao(self):
         outer_h = QHBoxLayout(self.tab_codificacao)
         outer_h.setContentsMargins(4, 4, 4, 4)
@@ -2623,7 +3172,10 @@ class KronosProQtApp(QMainWindow):
 
         self.splitter_main = QSplitter(Qt.Orientation.Horizontal)
         self.splitter_main.setChildrenCollapsible(True)
-        self.splitter_main.setHandleWidth(6)
+        self.splitter_main.setCollapsible(0, True)
+        self.splitter_main.setCollapsible(1, False)
+        self.splitter_main.setCollapsible(2, False)
+        self.splitter_main.setHandleWidth(10)
         outer_h.addWidget(self.splitter_main, 1)
 
         self.aba_expandir_dir = QPushButton("◀\nG\nR\nU\nP\nO\nS")
@@ -2636,7 +3188,7 @@ class KronosProQtApp(QMainWindow):
 
         self.painel_esquerdo = QFrame()
         self.painel_esquerdo.setObjectName("Panel")
-        self.painel_esquerdo.setMinimumWidth(175)
+        self.painel_esquerdo.setMinimumWidth(140)
         v_esq = QVBoxLayout(self.painel_esquerdo)
         v_esq.setContentsMargins(0, 0, 0, 6)
         v_esq.setSpacing(4)
@@ -2659,18 +3211,41 @@ class KronosProQtApp(QMainWindow):
         v_esq.addWidget(lbl_hint_mac)
 
         self.barra_ferramentas_canvas = QFrame()
-        h_add = QHBoxLayout(self.barra_ferramentas_canvas)
-        h_add.setContentsMargins(8, 2, 8, 2)
-        h_add.setSpacing(4)
+        v_add = QVBoxLayout(self.barra_ferramentas_canvas)
+        v_add.setContentsMargins(8, 2, 8, 4)
+        v_add.setSpacing(4)
+
+        h_add_1 = QHBoxLayout()
+        h_add_1.setSpacing(4)
         b_add_m = QPushButton("+ Momento")
         b_add_m.clicked.connect(lambda: self.freeform_canvas.adicionar_novo_item("momento"))
         b_add_a = QPushButton("+ Ação")
         b_add_a.clicked.connect(lambda: self.freeform_canvas.adicionar_novo_item("acao"))
         b_add_l = QPushButton("+ Etiqueta")
         b_add_l.clicked.connect(lambda: self.freeform_canvas.adicionar_novo_item("label"))
-        h_add.addWidget(b_add_m)
-        h_add.addWidget(b_add_a)
-        h_add.addWidget(b_add_l)
+        h_add_1.addWidget(b_add_m)
+        h_add_1.addWidget(b_add_a)
+        h_add_1.addWidget(b_add_l)
+        v_add.addLayout(h_add_1)
+
+        h_add_2 = QHBoxLayout()
+        h_add_2.setSpacing(4)
+        b_desc_campo = QPushButton("Descartar Campo")
+        b_desc_campo.setObjectName("DangerBtn")
+        b_repor_campo = QPushButton("+ Campo")
+        b_repor_campo.setObjectName("SuccessBtn")
+        b_undo_c = QPushButton("↶")
+        b_undo_c.setToolTip("Retroceder alteração na janela de código")
+        b_undo_c.clicked.connect(self.desfazer_janela_codigo)
+        b_redo_c = QPushButton("↷")
+        b_redo_c.setToolTip("Avançar alteração na janela de código")
+        b_redo_c.clicked.connect(self.refazer_janela_codigo)
+        h_add_2.addWidget(b_desc_campo)
+        h_add_2.addWidget(b_repor_campo)
+        h_add_2.addWidget(b_undo_c)
+        h_add_2.addWidget(b_redo_c)
+        v_add.addLayout(h_add_2)
+
         self.barra_ferramentas_canvas.setVisible(False)
         v_esq.addWidget(self.barra_ferramentas_canvas)
 
@@ -2678,6 +3253,8 @@ class KronosProQtApp(QMainWindow):
         self.scroll_canvas.setWidgetResizable(True)
         self.scroll_canvas.setStyleSheet("border: none;")
         self.freeform_canvas = FreeformCodeCanvas(self)
+        b_desc_campo.clicked.connect(self.freeform_canvas.descartar_campo)
+        b_repor_campo.clicked.connect(self.freeform_canvas.repor_campo)
         self.freeform_canvas.reconstruir_widgets()
         self.scroll_canvas.setWidget(self.freeform_canvas)
         v_esq.addWidget(self.scroll_canvas, 1)
@@ -2686,7 +3263,7 @@ class KronosProQtApp(QMainWindow):
 
         self.splitter_centro = QSplitter(Qt.Orientation.Vertical)
         self.splitter_centro.setChildrenCollapsible(True)
-        self.splitter_centro.setHandleWidth(6)
+        self.splitter_centro.setHandleWidth(10)
         self.painel_video_container = self.criar_painel_video_gpu()
         self.timeline_widget = TimelineWidget(self)
 
@@ -2697,7 +3274,7 @@ class KronosProQtApp(QMainWindow):
 
         self.painel_direito = QFrame()
         self.painel_direito.setObjectName("Panel")
-        self.painel_direito.setMinimumWidth(165)
+        self.painel_direito.setMinimumWidth(185)
         v_dir_main = QVBoxLayout(self.painel_direito)
         v_dir_main.setContentsMargins(0, 0, 0, 6)
         v_dir_main.setSpacing(4)
@@ -2730,17 +3307,26 @@ class KronosProQtApp(QMainWindow):
         self.splitter_main.setSizes([295, 965, 270])
 
     def limpar_layout(self, layout):
+        if layout is None:
+            return
         while layout.count():
             item = layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-            elif item.layout():
-                self.limpar_layout(item.layout())
+            if item is None:
+                continue
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+            sub_lay = item.layout()
+            if sub_lay is not None:
+                self.limpar_layout(sub_lay)
+                sub_lay.deleteLater()
 
     def reconstruir_conteudo_painel_direito(self):
         self.limpar_layout(self.layout_grupos_dinamico)
         v_lay = self.layout_grupos_dinamico
 
+        self.botoes_grupos_dash = []
         self.dash_labels = {}
         for acao, info in self.todas_pistas.items():
             row = QHBoxLayout()
@@ -2758,6 +3344,7 @@ class KronosProQtApp(QMainWindow):
 
             v_lay.addLayout(row)
             self.dash_labels[acao] = lbl_qtd
+            self.botoes_grupos_dash.append((btn_grp, acao))
 
         v_lay.addSpacing(10)
         v_lay.addWidget(QLabel("<b style='color:#94A3B8;'>ANOTAÇÃO DO LANCE</b>"))
@@ -2791,6 +3378,26 @@ class KronosProQtApp(QMainWindow):
         v_lay.addWidget(btn_csv)
 
         v_lay.addStretch()
+
+        if hasattr(self, "painel_direito"):
+            self.painel_direito.installEventFilter(self)
+        self.atualizar_escala_grupos_contadores()
+
+    def atualizar_escala_grupos_contadores(self):
+        if not hasattr(self, "botoes_grupos_dash") or not hasattr(self, "painel_direito"):
+            return
+        larg_painel = max(140, self.painel_direito.width())
+        tam_pt = max(8, min(13, int(round(larg_painel / 24.0))))
+        for btn, texto_orig in self.botoes_grupos_dash:
+            try:
+                f = btn.font()
+                f.setPointSize(tam_pt)
+                btn.setFont(f)
+                fm = btn.fontMetrics()
+                larg_util = max(50, larg_painel - 85)
+                btn.setText(fm.elidedText(texto_orig, Qt.TextElideMode.ElideRight, larg_util))
+            except RuntimeError:
+                pass
 
     def abrir_subjanela_grupo(self, nome_grupo, cor_hex):
         dlg = SubjanelaCortesGrupoDialog(self, nome_grupo, cor_hex)
@@ -2886,20 +3493,17 @@ class KronosProQtApp(QMainWindow):
         v_lay.addWidget(transport)
         return container
 
-    # =========================================================================
-    # SEPARADOR 2: VISION STUDIO
-    # =========================================================================
     def configurar_tab_estudio(self):
         layout = QVBoxLayout(self.tab_estudio)
         layout.setContentsMargins(6, 6, 6, 6)
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(True)
-        splitter.setHandleWidth(6)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(10)
         layout.addWidget(splitter)
 
         f_esq = QFrame()
         f_esq.setObjectName("Panel")
-        f_esq.setMinimumWidth(275)
+        f_esq.setMinimumWidth(210)
         v_esq = QVBoxLayout(f_esq)
         v_esq.setContentsMargins(0, 0, 0, 8)
         v_esq.setSpacing(6)
@@ -3067,7 +3671,7 @@ class KronosProQtApp(QMainWindow):
 
         f_dir = QFrame()
         f_dir.setObjectName("Panel")
-        f_dir.setMinimumWidth(265)
+        f_dir.setMinimumWidth(205)
         v_dir = QVBoxLayout(f_dir)
         v_dir.setContentsMargins(0, 0, 0, 8)
         v_dir.setSpacing(6)
@@ -3147,26 +3751,58 @@ class KronosProQtApp(QMainWindow):
 
     def configurar_tab_analytics(self):
         layout = QHBoxLayout(self.tab_analytics)
+        layout.setContentsMargins(6, 6, 6, 6)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(True)
-        splitter.setHandleWidth(6)
+        splitter.setHandleWidth(8)
         layout.addWidget(splitter)
 
         f_esq = QFrame()
         f_esq.setObjectName("Panel")
+        f_esq.setMinimumWidth(230)
         v_esq = QVBoxLayout(f_esq)
-        v_esq.addWidget(QLabel("<b style='color:#38BDF8;'>FILTROS ESPACIAIS</b>"))
+        v_esq.setContentsMargins(10, 10, 10, 10)
+        v_esq.setSpacing(7)
 
+        v_esq.addWidget(QLabel("<b style='color:#38BDF8; letter-spacing:0.6px;'>FILTROS ESPACIAIS</b>"))
+
+        v_esq.addWidget(QLabel("<span style='color:#94A3B8; font-size:11px;'>Categoria / Ação:</span>"))
         self.combo_heatmap = QComboBox()
         self.combo_heatmap.addItems(["Todas as Ações"] + list(self.todas_pistas.keys()))
         self.combo_heatmap.currentTextChanged.connect(self.desenhar_heatmap_espacial)
         v_esq.addWidget(self.combo_heatmap)
+
+        v_esq.addWidget(QLabel("<span style='color:#94A3B8; font-size:11px;'>Etiqueta:</span>"))
+        self.combo_etiqueta_spatial = QComboBox()
+        self.combo_etiqueta_spatial.addItems(["Todas as Etiquetas"] + list(self.lista_labels))
+        self.combo_etiqueta_spatial.currentTextChanged.connect(self.desenhar_heatmap_espacial)
+        v_esq.addWidget(self.combo_etiqueta_spatial)
+
+        v_esq.addSpacing(4)
+        v_esq.addWidget(QLabel("<b style='color:#38BDF8; letter-spacing:0.6px;'>CAMADAS DO RELVADO</b>"))
+
+        self.chk_spatial_heatmap = QCheckBox("Mapa de Calor (Heatmap)")
+        self.chk_spatial_heatmap.setChecked(True)
+        self.chk_spatial_heatmap.toggled.connect(self.desenhar_heatmap_espacial)
+        v_esq.addWidget(self.chk_spatial_heatmap)
+
+        self.chk_spatial_pontos = QCheckBox("Pontos / Marcadores de Eventos")
+        self.chk_spatial_pontos.setChecked(True)
+        self.chk_spatial_pontos.toggled.connect(self.desenhar_heatmap_espacial)
+        v_esq.addWidget(self.chk_spatial_pontos)
+
+        self.chk_spatial_zonas = QCheckBox("Grelha Tática / Zonas")
+        self.chk_spatial_zonas.setChecked(True)
+        self.chk_spatial_zonas.toggled.connect(self.desenhar_heatmap_espacial)
+        v_esq.addWidget(self.chk_spatial_zonas)
 
         btn_upd = QPushButton("Atualizar Diagrama")
         btn_upd.setObjectName("AccentBtn")
         btn_upd.clicked.connect(self.desenhar_heatmap_espacial)
         v_esq.addWidget(btn_upd)
 
+        v_esq.addSpacing(4)
+        v_esq.addWidget(QLabel("<b style='color:#94A3B8;'>RESUMO ZONAL</b>"))
         self.txt_resumo_zonas = QTextEdit()
         self.txt_resumo_zonas.setReadOnly(True)
         v_esq.addWidget(self.txt_resumo_zonas, 1)
@@ -3174,13 +3810,10 @@ class KronosProQtApp(QMainWindow):
 
         self.lbl_heatmap_canvas = QLabel()
         self.lbl_heatmap_canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_heatmap_canvas.setStyleSheet("background-color: #000000;")
+        self.lbl_heatmap_canvas.setStyleSheet("background-color: #000000; border: 1px solid #181822; border-radius: 8px;")
         splitter.addWidget(self.lbl_heatmap_canvas)
         splitter.setSizes([280, 1200])
 
-    # =========================================================================
-    # MOTOR DE VÍDEO ÚNICO PARTILHADO
-    # =========================================================================
     def escolher_ficheiro_video(self):
         caminho, _ = QFileDialog.getOpenFileName(self, "Selecionar Vídeo", "", "Vídeos (*.mp4 *.mov *.avi *.mkv *.ts)")
         if caminho:
@@ -3308,11 +3941,20 @@ class KronosProQtApp(QMainWindow):
         self.zona_campo_atual = nome_zona
         self.coord_campo_atual = coord
 
-        for c in ["Corredor Esq", "Corredor Central", "Corredor Dir"]:
-            if c in self.labels_ativas:
-                self.labels_ativas.remove(c)
-        if corredor in self.lista_labels:
-            self.labels_ativas.add(corredor)
+        zonas_exclusivas = {
+            "Corredor Esq", "Corredor Central", "Corredor Dir",
+            "Ponta Esq", "Lateral Esq", "Central / Pivot", "Lateral Dir", "Ponta Dir",
+            "Garrafão", "Ala / 3P", "Topo / Chave",
+            "Zona 1", "Zona 2", "Zona 3", "Zona 4", "Zona 5", "Zona 6", "Zona 7", "Zona 8", "Zona 9"
+        }
+        for z in list(self.labels_ativas):
+            if z in zonas_exclusivas:
+                self.labels_ativas.remove(z)
+
+        alvo = corredor if corredor in self.lista_labels else (nome_zona if nome_zona in self.lista_labels else "")
+        if alvo:
+            self.labels_ativas.add(alvo)
+
         self.freeform_canvas.atualizar_visual_todos()
 
     def toggle_label(self, lbl):
@@ -3412,7 +4054,10 @@ class KronosProQtApp(QMainWindow):
         self.db.sincronizar_lista(self.eventos_registados)
         contagem = self.db.contagem_por_acao()
         for acao, lbl in self.dash_labels.items():
-            lbl.setText(str(contagem.get(acao, 0)))
+            try:
+                lbl.setText(str(contagem.get(acao, 0)))
+            except RuntimeError:
+                pass
 
     def guardar_nota_corte(self):
         if self.bloco_selecionado is not None and 0 <= self.bloco_selecionado < len(self.eventos_registados):
@@ -3458,9 +4103,6 @@ class KronosProQtApp(QMainWindow):
         lay.addLayout(grid)
         dlg.exec()
 
-    # =========================================================================
-    # LÓGICA DO VISION STUDIO (CACHE ASSÍNCRONA + HOMOGRAFIA + DISPARO FIÁVEL)
-    # =========================================================================
     def importar_todos_para_estudio(self):
         if not self.eventos_registados:
             QMessageBox.warning(self, "Aviso", "Registe primeiro cortes no Match Desk.")
@@ -3519,9 +4161,11 @@ class KronosProQtApp(QMainWindow):
 
         class _SkimWorker(QThread):
             pronto = pyqtSignal(list)
+
             def __init__(self, path, inicio, fim, fps):
                 super().__init__()
                 self.path, self.inicio, self.fim, self.fps = path, inicio, fim, fps
+
             def run(self):
                 cache_local = []
                 dur = max(0.5, self.fim - self.inicio)
@@ -3635,7 +4279,7 @@ class KronosProQtApp(QMainWindow):
 
             if self.stack_visor_studio.currentIndex() == 0:
                 for k_idx, kf in enumerate(clip.get("keyframes", [])):
-                    if k_idx not in self.studio_keyframes_ja_pausados and kf.get("efeitos"):
+                    if k_idx not in self.studio_keyframes_ja_pausados:
                         cruzou = (t_ant <= kf["tempo"] <= self.studio_tempo_atual)
                         proximo = (0.0 <= (self.studio_tempo_atual - kf["tempo"]) <= 0.45)
                         if cruzou or proximo:
@@ -3649,8 +4293,12 @@ class KronosProQtApp(QMainWindow):
             self._ultimo_t_studio = self.studio_tempo_atual
 
             if self.studio_tempo_atual >= clip["fim"]:
-                self.media_player.pause()
-                self.btn_play_studio.definir_modo("play")
+                prox_idx = self.idx_clip_studio + 1
+                if prox_idx < len(self.studio_clips):
+                    self.lista_clips_studio_w.setCurrentRow(prox_idx)
+                else:
+                    self.media_player.pause()
+                    self.btn_play_studio.definir_modo("play")
 
     def retomar_video_studio_apos_pausa(self):
         if self.tabs.currentIndex() == 1 and self.idx_clip_studio is not None:
@@ -3736,7 +4384,7 @@ class KronosProQtApp(QMainWindow):
         self.pontos_calibracao = []
         self.lbl_estado_visor_studio.setText(
             "<b style='color:#22C55E; font-size:13px;'>CALIBRAÇÃO 4 PONTOS:</b> "
-            "Clique nos 4 cantos da Grande Área (Sup. Esq → Sup. Dir → Inf. Dir → Inf. Esq)"
+            "Clique nos 4 cantos da área de referência (Sup. Esq → Sup. Dir → Inf. Dir → Inf. Esq)"
         )
         self.atualizar_preview_estudio()
 
@@ -3975,9 +4623,6 @@ class KronosProQtApp(QMainWindow):
         self.atualizar_lista_keyframes_ui()
         self.atualizar_preview_estudio()
 
-    # =========================================================================
-    # MOTOR GRÁFICO BROADCAST HD + MÁSCARA EXCESS GREEN (JOGADORES POR CIMA)
-    # =========================================================================
     @staticmethod
     def calcular_mascara_relva(frame_bgr):
         b, g, r = cv2.split(frame_bgr.astype(np.int16))
@@ -3999,7 +4644,6 @@ class KronosProQtApp(QMainWindow):
         img = frame.copy()
         h, w = img.shape[:2]
 
-        # 1. Camada de Relvado (Polígono, Anéis, Cones, Sombras — ficam SEMPRE por baixo dos jogadores)
         rgb_chao = np.ascontiguousarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         qimg_chao = QImage(rgb_chao.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
         pc = QPainter(qimg_chao)
@@ -4069,7 +4713,6 @@ class KronosProQtApp(QMainWindow):
         else:
             img = camada_chao
 
-        # 2. Efeitos de Pixel (Foco Luz, Mover Atleta, Lupa 2.0x)
         spots = [e for e in efeitos if e["tipo"] == "spotlight"]
         if spots:
             escuro = (img * 0.28).astype(np.uint8)
@@ -4127,7 +4770,6 @@ class KronosProQtApp(QMainWindow):
                 cv2.circle(img, (dx + diam // 2, dy + diam // 2), diam // 2 - 2, bgr_z, 4, cv2.LINE_AA)
                 cv2.circle(img, (dx + diam // 2, dy + diam // 2), diam // 2 - 2, (255, 255, 255), 1, cv2.LINE_AA)
 
-        # 3. Camada Superior Vetorial
         rgb_top = np.ascontiguousarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         qimg = QImage(rgb_top.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
         p = QPainter(qimg)
@@ -4362,7 +5004,7 @@ class KronosProQtApp(QMainWindow):
 
         caminho_pdf, _ = QFileDialog.getSaveFileName(
             self, "Guardar Relatório Tático PDF",
-            ""
+            os.path.expanduser("~/Desktop/KRONOS_Dossier_Tatico.pdf"),
             "Ficheiro PDF (*.pdf)"
         )
         if not caminho_pdf:
@@ -4423,14 +5065,27 @@ class KronosProQtApp(QMainWindow):
         if not lista_exportar:
             QMessageBox.warning(self, "Aviso", "Sem cortes registados para exportar.")
             return
+        if not os.path.exists(self.caminho_video):
+            QMessageBox.warning(self, "Aviso", "Carregue primeiro o ficheiro de vídeo original antes de exportar.")
+            return
 
-        caminho_saida = ""
+        caminho_saida, _ = QFileDialog.getSaveFileName(
+            self,
+            "Guardar Vídeo Compilado (.MP4)",
+            os.path.expanduser("~/Desktop/KRONOS_Compilacao.mp4"),
+            "Vídeo MP4 (*.mp4)"
+        )
+        if not caminho_saida:
+            return
+        if not caminho_saida.lower().endswith(".mp4"):
+            caminho_saida += ".mp4"
+
         self.media_player.pause()
         self.btn_play.definir_modo("play")
         if hasattr(self, "btn_play_studio"):
             self.btn_play_studio.definir_modo("play")
 
-        self.dlg_progresso = QProgressDialog("A iniciar motor de exportação...", None, 0, 100, self)
+        self.dlg_progresso = QProgressDialog("A iniciar motor de compilação...", None, 0, 100, self)
         self.dlg_progresso.setWindowTitle("Exportação de Vídeo KRONOS")
         self.dlg_progresso.setWindowModality(Qt.WindowModality.WindowModal)
         self.dlg_progresso.setMinimumDuration(0)
@@ -4443,7 +5098,7 @@ class KronosProQtApp(QMainWindow):
         )
         self.worker_export.progresso.connect(self.ao_atualizar_progresso_export)
         self.worker_export.concluido.connect(self.ao_concluir_exportacao)
-        self.worker_export.erro.connect(lambda msg: QMessageBox.critical(self, "Erro", msg))
+        self.worker_export.erro.connect(lambda msg: (self.dlg_progresso.close(), QMessageBox.critical(self, "Erro", msg)))
         self.worker_export.start()
 
     def ao_atualizar_progresso_export(self, val, texto):
@@ -4455,43 +5110,135 @@ class KronosProQtApp(QMainWindow):
         QMessageBox.information(self, "Exportação Concluída", f"Ficheiro MP4 guardado na Secretária:\n{caminho}")
 
     def desenhar_heatmap_espacial(self):
-        w, h = 850, 520
-        campo = np.zeros((h, w, 3), dtype=np.uint8)
-        campo[:] = (18, 38, 25)
+        if not hasattr(self, "lbl_heatmap_canvas"):
+            return
+        mod = getattr(self, "modalidade_atual", "futebol")
+        w, h = 920, 560
+        campo_qimg = QImage(w, h, QImage.Format.Format_RGB888)
+        cores_envolvente = {
+            "voleibol": QColor("#081E46"),
+            "basquetebol": QColor("#1E3A8A"),
+            "andebol": QColor("#07131C"),
+            "futebol": QColor("#050508")
+        }
+        campo_qimg.fill(cores_envolvente.get(mod, QColor("#050508")))
 
-        filtro = self.combo_heatmap.currentText()
-        evs = [e for e in self.eventos_registados if filtro == "Todas as Ações" or e["acao"] == filtro]
+        marg_x, marg_y = 48, 44
+        cw, ch = w - 2 * marg_x, h - 2 * marg_y
+        rect_campo = QRectF(marg_x, marg_y, cw, ch)
+
+        filtro_acao = self.combo_heatmap.currentText() if hasattr(self, "combo_heatmap") else "Todas as Ações"
+        filtro_lbl = self.combo_etiqueta_spatial.currentText() if hasattr(self, "combo_etiqueta_spatial") else "Todas as Etiquetas"
+
+        evs = [
+            e for e in self.eventos_registados
+            if (filtro_acao == "Todas as Ações" or e.get("acao") == filtro_acao)
+            and (filtro_lbl == "Todas as Etiquetas" or filtro_lbl in e.get("labels", []))
+        ]
+
+        usar_calor = self.chk_spatial_heatmap.isChecked() if hasattr(self, "chk_spatial_heatmap") else True
+        usar_pontos = self.chk_spatial_pontos.isChecked() if hasattr(self, "chk_spatial_pontos") else True
+        usar_zonas = self.chk_spatial_zonas.isChecked() if hasattr(self, "chk_spatial_zonas") else True
+
+        p = QPainter(campo_qimg)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+
+        self._desenhar_campo_por_modalidade(p, mod, rect_campo, mostrar_zonas=usar_zonas)
+
         acum = np.zeros((h, w), dtype=np.float32)
-        contagem = {}
+        contagem_zonas = {}
 
         for e in evs:
-            cx, cy = e.get("coord", (0.5, 0.5))
-            cv2.circle(acum, (int(cx * (w - 80) + 40), int(cy * (h - 80) + 40)), 65, 1.0, -1)
-            z = e.get("zona", "Zona Central")
-            contagem[z] = contagem.get(z, 0) + 1
+            cx_n, cy_n = e.get("coord", (0.5, 0.5))
+            cx_n = max(0.0, min(1.0, float(cx_n)))
+            cy_n = max(0.0, min(1.0, float(cy_n)))
+            px = int(round(marg_x + cx_n * cw))
+            py = int(round(marg_y + cy_n * ch))
+            if usar_calor:
+                cv2.circle(acum, (px, py), 62, 1.0, -1)
 
-        if np.max(acum) > 0:
-            acum = cv2.GaussianBlur(acum, (91, 91), 0)
-            norm = (acum / np.max(acum) * 255).astype(np.uint8)
+            zona = e.get("zona")
+            if not zona:
+                if mod == "voleibol":
+                    zona, _ = self._calcular_zona_voleibol(cx_n, cy_n)
+                elif mod == "basquetebol":
+                    zona, _ = self._calcular_zona_basquetebol(cx_n, cy_n)
+                elif mod == "andebol":
+                    zona, _ = self._calcular_zona_andebol(cx_n, cy_n)
+                else:
+                    col = min(5, int(cx_n * 6))
+                    row = min(2, int(cy_n * 3))
+                    corredores = ["Corredor Esq", "Corredor Central", "Corredor Dir"]
+                    zona = f"Zona {col * 3 + row + 1} ({corredores[row]})"
+            contagem_zonas[zona] = contagem_zonas.get(zona, 0) + 1
+
+        if usar_calor and np.max(acum) > 0:
+            p.end()
+            ptr = campo_qimg.constBits()
+            ptr.setsize(h * w * 3)
+            campo_bgr = cv2.cvtColor(np.frombuffer(ptr, np.uint8).reshape((h, w, 3)).copy(), cv2.COLOR_RGB2BGR)
+            acum_blur = cv2.GaussianBlur(acum, (95, 95), 0)
+            norm = (acum_blur / np.max(acum_blur) * 255).astype(np.uint8)
             cmap = cv2.applyColorMap(norm, cv2.COLORMAP_JET)
-            campo = np.where((norm > 15)[:, :, np.newaxis], cv2.addWeighted(campo, 0.45, cmap, 0.55, 0), campo)
+            masc_campo = np.zeros((h, w), dtype=np.uint8)
+            cv2.rectangle(masc_campo, (marg_x, marg_y), (marg_x + cw, marg_y + ch), 255, -1)
+            ativo_px = ((norm > 12) & (masc_campo > 0))[:, :, np.newaxis]
+            fusao = cv2.addWeighted(campo_bgr, 0.42, cmap, 0.58, 0)
+            campo_bgr = np.where(ativo_px, fusao, campo_bgr)
+            rgb = cv2.cvtColor(campo_bgr, cv2.COLOR_BGR2RGB)
+            campo_qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+            p = QPainter(campo_qimg)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            self._desenhar_campo_por_modalidade(p, mod, rect_campo, mostrar_zonas=usar_zonas)
 
-        cv2.rectangle(campo, (40, 40), (w - 40, h - 40), (210, 210, 210), 2)
-        cv2.line(campo, (w // 2, 40), (w // 2, h - 40), (210, 210, 210), 2)
+        if usar_pontos:
+            for e in evs:
+                cx_n, cy_n = e.get("coord", (0.5, 0.5))
+                px = marg_x + max(0.0, min(1.0, float(cx_n))) * cw
+                py = marg_y + max(0.0, min(1.0, float(cy_n))) * ch
+                cor_hex = self.todas_pistas.get(e.get("acao", ""), {}).get("cor", "#F59E0B")
+                p.setBrush(QBrush(QColor("#000000")))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.drawEllipse(QPointF(px, py), 7.0, 7.0)
+                p.setBrush(QBrush(QColor(cor_hex)))
+                p.setPen(QPen(QColor("#FFFFFF"), 1.2))
+                p.drawEllipse(QPointF(px, py), 5.0, 5.0)
 
-        rgb = cv2.cvtColor(campo, cv2.COLOR_BGR2RGB)
-        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
-        self.lbl_heatmap_canvas.setPixmap(QPixmap.fromImage(qimg))
+        p.end()
 
-        resumo = f"RELATÓRIO ZONAL ({filtro})\nRegistos: {len(evs)}\n" + "-" * 28 + "\n\n"
-        for z, q in sorted(contagem.items(), key=lambda x: x[1], reverse=True):
-            resumo += f"{z}: {q}\n"
-        self.txt_resumo_zonas.setText(resumo)
+        dpr = self.devicePixelRatioF()
+        pix = QPixmap.fromImage(campo_qimg).scaled(
+            int(max(400, self.lbl_heatmap_canvas.width()) * dpr),
+            int(max(300, self.lbl_heatmap_canvas.height()) * dpr),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        pix.setDevicePixelRatio(dpr)
+        self.lbl_heatmap_canvas.setPixmap(pix)
+
+        total_evs = len(evs)
+        resumo = (
+            f"RELATÓRIO ZONAL ({mod.upper()})\n"
+            f"Ação: {filtro_acao}\n"
+            f"Etiqueta: {filtro_lbl}\n"
+            f"Registos: {total_evs}\n"
+            + ("-" * 30) + "\n\n"
+        )
+        if not contagem_zonas:
+            resumo += "Sem registos para os filtros selecionados.\n"
+        else:
+            for z, q in sorted(contagem_zonas.items(), key=lambda x: x[1], reverse=True):
+                pct = (q / max(1, total_evs)) * 100.0
+                resumo += f"{z}: {q} ({pct:.1f}%)\n"
+        if hasattr(self, "txt_resumo_zonas"):
+            self.txt_resumo_zonas.setText(resumo)
 
     def guardar_projeto_json(self):
         caminho, _ = QFileDialog.getSaveFileName(self, "Guardar Sessão Completa", "sessao_kronos.json", "JSON (*.json)")
         if caminho:
             dados = {
+                "modalidade_atual": getattr(self, "modalidade_atual", "futebol"),
                 "caminho_video": self.caminho_video,
                 "layout_items": self.layout_items,
                 "eventos_registados": self.eventos_registados,
@@ -4505,8 +5252,18 @@ class KronosProQtApp(QMainWindow):
         if caminho:
             with open(caminho, "r", encoding="utf-8") as f:
                 dados = json.load(f)
+            mod_s = dados.get("modalidade_atual")
+            if mod_s in ("futebol", "voleibol", "basquetebol", "andebol"):
+                self.modalidade_atual = mod_s
+                if hasattr(self, "combo_modalidade"):
+                    idx_m = self.combo_modalidade.findData(mod_s)
+                    if idx_m >= 0:
+                        self.combo_modalidade.blockSignals(True)
+                        self.combo_modalidade.setCurrentIndex(idx_m)
+                        self.combo_modalidade.blockSignals(False)
             if "layout_items" in dados:
                 self.layout_items = dados["layout_items"]
+                self.campo_oculto = not any(it.get("tipo") == "minicampo" for it in self.layout_items)
                 self.freeform_canvas.reconstruir_widgets()
                 self.sincronizar_estruturas_desde_canvas()
             self.eventos_registados = dados.get("eventos_registados", [])
@@ -4518,7 +5275,13 @@ class KronosProQtApp(QMainWindow):
     def exportar_excel(self):
         if not self.eventos_registados:
             return
-        caminho = ""
+        caminho, _ = QFileDialog.getSaveFileName(
+            self, "Exportar Dados (CSV)",
+            os.path.expanduser("~/Desktop/kronos_eventos.csv"),
+            "CSV (*.csv)"
+        )
+        if not caminho:
+            return
         with open(caminho, mode="w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["Categoria", "Início", "Fim", "Duração", "Zona", "Etiquetas", "Nota"])
