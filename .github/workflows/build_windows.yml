@@ -22,7 +22,7 @@ jobs:
 
       - name: Compilar KRONOS PRO.exe com icone
         run: |
-          pyinstaller --noconfirm --windowed --icon kronos_icon.ico --name "KRONOS PRO" sportscode_mvp.py
+          pyinstaller --noconfirm --windowed --onefile --icon kronos_icon.ico --name "KRONOS PRO" sportscode_mvp.py
 
       - name: Disponibilizar ficheiro para transferir
         uses: actions/upload-artifact@v4
