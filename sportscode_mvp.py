@@ -12,6 +12,17 @@ import subprocess
 import tempfile
 import cv2
 import numpy as np
+from pathlib import Path
+PASTA_KRONOS_BASE = Path.home() / "Kronos_Pro"
+PASTA_PROJETOS = PASTA_KRONOS_BASE / "Projetos"
+PASTA_EXPORTACOES = PASTA_KRONOS_BASE / "Exportacoes"
+PASTA_AUTOSAVE = PASTA_KRONOS_BASE / "AutoSave"
+
+for _p in (PASTA_PROJETOS, PASTA_EXPORTACOES, PASTA_AUTOSAVE):
+    _p.mkdir(parents=True, exist_ok=True)
+
+AUTOSAVE_PATH = PASTA_AUTOSAVE / "sessao_ativa_autosave.json"
+RECENTES_PATH = PASTA_KRONOS_BASE / "projetos_recentes.json"
 
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
 os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
@@ -434,15 +445,20 @@ class VectorLogoWidget(QWidget):
         f_title = QFont("Helvetica Neue", 16, QFont.Weight.Bold)
         f_title.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.0)
         p.setFont(f_title)
-        p.drawText(QPointF(49.0, 23.0), "KRONOS")
+        x_kronos = 49.0
+        p.drawText(QPointF(x_kronos, 23.0), "KRONOS")
 
-        rect_pro = QRectF(146.0, 8.5, 38.0, 16.0)
+        larg_kronos = p.fontMetrics().horizontalAdvance("KRONOS")
+        x_pro = x_kronos + larg_kronos + 8.0
+        rect_pro = QRectF(x_pro, 8.0, 42.0, 17.0)
         p.setBrush(QBrush(QColor("#F59E0B")))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(rect_pro, 4.0, 4.0)
 
         p.setPen(QColor("#000000"))
-        f_pro = QFont("Helvetica Neue", 9, QFont.Weight.Bold)
+        f_pro = QFont(self.font())
+        f_pro.setPointSize(9)
+        f_pro.setBold(True)
         p.setFont(f_pro)
         p.drawText(rect_pro, Qt.AlignmentFlag.AlignCenter, "PRO")
 
@@ -959,7 +975,10 @@ class DraggableCodeWidget(QWidget):
 
         if tipo == "minicampo":
             mod = getattr(self.app, "modalidade_atual", "futebol")
-            self.app._desenhar_campo_por_modalidade(p, mod, QRectF(1.0, 1.0, w - 2.0, h - 2.0), mostrar_zonas=True)
+            margem_bal = 7.0 if mod == "futebol" else 1.0
+            self.app._desenhar_campo_por_modalidade(
+                p, mod, QRectF(margem_bal, 1.0, w - 2.0 * margem_bal, h - 2.0), mostrar_zonas=True
+            )
 
             px = self.app.coord_campo_atual[0] * w
             py = self.app.coord_campo_atual[1] * h
@@ -2519,6 +2538,9 @@ class KronosProQtApp(QMainWindow):
 
         self.media_player.setVideoOutput(self.video_widget)
         QApplication.instance().installEventFilter(self)
+        self.projeto_atual_path = ""
+        self.alteracoes_por_guardar = False
+        QTimer.singleShot(150, self.verificar_recuperacao)
 
     def ao_alternar_separador_principal(self, idx):
         if not hasattr(self, "btn_play") or not hasattr(self, "video_widget"):
@@ -2726,31 +2748,38 @@ class KronosProQtApp(QMainWindow):
 
         h_layout.addStretch()
 
+        btn_open = QPushButton("Abrir Vídeo")
+        btn_open.clicked.connect(self.escolher_ficheiro_video)
+        h_layout.addWidget(btn_open)
+
+        btn_sessao = QPushButton("Sessão")
+        menu_sessao = QMenu(self)
+        act_guardar = menu_sessao.addAction("Guardar Sessão")
+        act_guardar.triggered.connect(self.guardar_projeto_json)
+        act_importar = menu_sessao.addAction("Importar Sessão")
+        act_importar.triggered.connect(self.abrir_projeto_json)
+        menu_sessao.addSeparator()
+        act_recentes = menu_sessao.addAction("Projetos Recentes")
+        act_recentes.triggered.connect(self.abrir_projetos_recentes_dialog)
+        act_pasta = menu_sessao.addAction("Pasta Projetos")
+        act_pasta.triggered.connect(self.abrir_pasta_kronos)
+        btn_sessao.setMenu(menu_sessao)
+        h_layout.addWidget(btn_sessao)
+
         self.btn_modo_livre = QPushButton("Personalizar Match Desk")
         self.btn_modo_livre.setObjectName("AccentBtn")
         self.btn_modo_livre.clicked.connect(self.alternar_modo_edicao_canvas)
         h_layout.addWidget(self.btn_modo_livre)
 
-        btn_open = QPushButton("Abrir Vídeo")
-        btn_open.clicked.connect(self.escolher_ficheiro_video)
-        h_layout.addWidget(btn_open)
-
-        btn_opt = QPushButton("Otimizar Vídeo")
-        btn_opt.setToolTip("Converte o vídeo atual para MP4 (H.264) fluido usando o motor integrado")
-        btn_opt.clicked.connect(self.otimizar_video_integrado)
-        h_layout.addWidget(btn_opt)
-
-        btn_save = QPushButton("Guardar Sessão")
-        btn_save.clicked.connect(self.guardar_projeto_json)
-        h_layout.addWidget(btn_save)
-
-        btn_load = QPushButton("Importar Sessão")
-        btn_load.clicked.connect(self.abrir_projeto_json)
-        h_layout.addWidget(btn_load)
-
-        btn_ajuda = QPushButton("Ajuda / Suporte")
-        btn_ajuda.clicked.connect(self.abrir_menu_suporte)
-        h_layout.addWidget(btn_ajuda)
+        btn_mais = QPushButton("Mais")
+        menu_mais = QMenu(self)
+        act_opt = menu_mais.addAction("Otimizar Vídeo")
+        act_opt.triggered.connect(self.otimizar_video_integrado)
+        menu_mais.addSeparator()
+        act_ajuda = menu_mais.addAction("Ajuda / Suporte")
+        act_ajuda.triggered.connect(self.abrir_menu_suporte)
+        btn_mais.setMenu(menu_mais)
+        h_layout.addWidget(btn_mais)
 
         parent_layout.addWidget(header)
 
@@ -3031,8 +3060,61 @@ class KronosProQtApp(QMainWindow):
             p.drawLine(QPointF(cx, y0), QPointF(cx, y1))
             raio_c = min(w, h) * 0.14
             p.drawEllipse(QPointF(cx, cy), raio_c, raio_c)
-            p.drawRect(QRectF(x0, y0 + h * 0.2, w * 0.14, h * 0.6))
-            p.drawRect(QRectF(x1 - w * 0.14, y0 + h * 0.2, w * 0.14, h * 0.6))
+
+            # Grandes áreas e pequenas áreas
+            ga_w = w * 0.155
+            ga_h = h * 0.58
+            ga_y0 = cy - ga_h / 2.0
+            p.drawRect(QRectF(x0, ga_y0, ga_w, ga_h))
+            p.drawRect(QRectF(x1 - ga_w, ga_y0, ga_w, ga_h))
+
+            pa_w = w * 0.055
+            pa_h = h * 0.27
+            pa_y0 = cy - pa_h / 2.0
+            p.drawRect(QRectF(x0, pa_y0, pa_w, pa_h))
+            p.drawRect(QRectF(x1 - pa_w, pa_y0, pa_w, pa_h))
+
+            # Marcas de penálti e meias-luas das grandes áreas
+            pen_x_e = x0 + w * 0.105
+            pen_x_d = x1 - w * 0.105
+            p.setBrush(QBrush(QColor("#E2E8F0")))
+            p.drawEllipse(QPointF(pen_x_e, cy), 1.6, 1.6)
+            p.drawEllipse(QPointF(pen_x_d, cy), 1.6, 1.6)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+
+            rx_ml = raio_c
+            ry_ml = raio_c
+            dx_ml_e = (x0 + ga_w) - pen_x_e
+            if rx_ml > dx_ml_e > 0:
+                ang_ml = math.degrees(math.acos(dx_ml_e / rx_ml))
+                p.drawArc(QRectF(pen_x_e - rx_ml, cy - ry_ml, 2.0 * rx_ml, 2.0 * ry_ml), int(-ang_ml * 16), int(2.0 * ang_ml * 16))
+                p.drawArc(QRectF(pen_x_d - rx_ml, cy - ry_ml, 2.0 * rx_ml, 2.0 * ry_ml), int((180.0 - ang_ml) * 16), int(2.0 * ang_ml * 16))
+
+            # Balizas táticas nas linhas de fundo (proporcionais e discretas)
+            bal_h = max(12.0, min(h * 0.14, w * 0.065))
+            bal_w = max(5.0, min(w * 0.028, 14.0))
+            bal_y0 = cy - bal_h / 2.0
+            rect_bal_esq = QRectF(x0 - bal_w, bal_y0, bal_w, bal_h)
+            rect_bal_dir = QRectF(x1, bal_y0, bal_w, bal_h)
+
+            p.setClipRect(rect_f.adjusted(-bal_w - 4.0, -4.0, bal_w + 4.0, 4.0))
+            p.setBrush(QBrush(QColor(56, 189, 248, 32)))
+            p.setPen(QPen(QColor("#E2E8F0"), 1.5))
+            p.drawRoundedRect(rect_bal_esq, 2.0, 2.0)
+            p.drawRoundedRect(rect_bal_dir, 2.0, 2.0)
+
+            # Rede suave no interior das balizas
+            p.setPen(QPen(QColor(226, 232, 240, 85), 0.9))
+            passos_rede = max(2, int(bal_h // 5))
+            for i_r in range(1, passos_rede):
+                ry = bal_y0 + (bal_h / passos_rede) * i_r
+                p.drawLine(QPointF(x0 - bal_w + 1.0, ry), QPointF(x0, ry))
+                p.drawLine(QPointF(x1, ry), QPointF(x1 + bal_w - 1.0, ry))
+
+            # Linha da baliza destacada em azul-ciano (identidade visual KRONOS PRO)
+            p.setPen(QPen(QColor("#38BDF8"), 2.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawLine(QPointF(x0, bal_y0), QPointF(x0, bal_y0 + bal_h))
+            p.drawLine(QPointF(x1, bal_y0), QPointF(x1, bal_y0 + bal_h))
 
         p.restore()
 
@@ -3991,6 +4073,7 @@ class KronosProQtApp(QMainWindow):
                 "zona": self.zona_campo_atual, "coord": self.coord_campo_atual, "nota": ""
             })
             self.bloco_selecionado = len(self.eventos_registados) - 1
+            self.guardar_autosave()
             self.freeform_canvas.atualizar_visual_todos()
             self.atualizar_dashboard()
             self.timeline_widget.update()
@@ -4021,6 +4104,7 @@ class KronosProQtApp(QMainWindow):
             if self.momento_ativo != item["link_momento"]:
                 self.alternar_momento(item["link_momento"])
 
+        self.guardar_autosave()
         self.atualizar_dashboard()
         self.timeline_widget.update()
 
@@ -4037,6 +4121,7 @@ class KronosProQtApp(QMainWindow):
                 "labels": list(self.labels_ativas), "zona": self.zona_campo_atual,
                 "coord": self.coord_campo_atual, "nota": ""
             })
+            self.guardar_autosave()
             if antigo == novo_momento:
                 self.momento_ativo = None
                 self.freeform_canvas.atualizar_visual_todos()
@@ -4063,6 +4148,7 @@ class KronosProQtApp(QMainWindow):
         if self.bloco_selecionado is not None and 0 <= self.bloco_selecionado < len(self.eventos_registados):
             self.eventos_registados[self.bloco_selecionado]["nota"] = self.entry_nota.text().strip()
             self.db.sincronizar_lista(self.eventos_registados)
+            self.guardar_autosave()
             self.timeline_widget.update()
 
     def iniciar_playlist_cortes(self, lista, dialog=None):
@@ -5107,6 +5193,7 @@ class KronosProQtApp(QMainWindow):
 
     def ao_concluir_exportacao(self, caminho):
         self.dlg_progresso.close()
+        self.limpar_autosave()
         QMessageBox.information(self, "Exportação Concluída", f"Ficheiro MP4 guardado na Secretária:\n{caminho}")
 
     def desenhar_heatmap_espacial(self):
@@ -5246,6 +5333,7 @@ class KronosProQtApp(QMainWindow):
             }
             with open(caminho, "w", encoding="utf-8") as f:
                 json.dump(dados, f, ensure_ascii=False, indent=2)
+            self.limpar_autosave()
 
     def abrir_projeto_json(self):
         caminho, _ = QFileDialog.getOpenFileName(self, "Importar Sessão", "", "JSON (*.json)")
@@ -5287,7 +5375,204 @@ class KronosProQtApp(QMainWindow):
             w.writerow(["Categoria", "Início", "Fim", "Duração", "Zona", "Etiquetas", "Nota"])
             for ev in self.eventos_registados:
                 w.writerow([ev["acao"], ev["inicio"], ev["fim"], round(ev["fim"] - ev["inicio"], 2), ev.get("zona", ""), ", ".join(ev["labels"]), ev["nota"]])
+        self.limpar_autosave()
         QMessageBox.information(self, "Exportado", f"Ficheiro CSV guardado na Secretária:\n{caminho}")
+
+    def _garantir_pastas_kronos(self):
+        for _p in (PASTA_PROJETOS, PASTA_EXPORTACOES, PASTA_AUTOSAVE):
+            _p.mkdir(parents=True, exist_ok=True)
+
+    def _nome_sugerido_projeto(self):
+        base_video = Path(self.caminho_video).stem if self.caminho_video else "jogo_analise"
+        data_str = time.strftime("%Y-%m-%d")
+        limpo = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in base_video).strip("_")
+        return f"{data_str}_{limpo or 'projeto'}.kronos.json"
+
+    def registar_projeto_recente(self, caminho_projeto):
+        if not caminho_projeto:
+            return
+        self._garantir_pastas_kronos()
+        recentes = []
+        if RECENTES_PATH.exists():
+            try:
+                with open(RECENTES_PATH, "r", encoding="utf-8") as f:
+                    recentes = json.load(f)
+            except Exception:
+                recentes = []
+
+        entrada = {
+            "projeto": str(caminho_projeto),
+            "nome": Path(caminho_projeto).name,
+            "video": self.caminho_video,
+            "modalidade": getattr(self, "modalidade_atual", "futebol"),
+            "atualizado_em": time.strftime("%Y-%m-%d %H:%M"),
+        }
+        recentes = [r for r in recentes if r.get("projeto") != str(caminho_projeto)]
+        recentes.insert(0, entrada)
+        recentes = recentes[:12]
+
+        try:
+            with open(RECENTES_PATH, "w", encoding="utf-8") as f:
+                json.dump(recentes, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Erro ao atualizar recentes: {e}")
+
+    def abrir_pasta_kronos(self):
+        self._garantir_pastas_kronos()
+        destino = str(PASTA_KRONOS_BASE)
+        try:
+            if platform.system() == "Darwin":
+                subprocess.run(["open", destino], check=False)
+            elif platform.system() == "Windows":
+                os.startfile(destino)  # type: ignore[attr-defined]
+            else:
+                subprocess.run(["xdg-open", destino], check=False)
+        except Exception as e:
+            QMessageBox.information(self, "Pasta Kronos Pro", f"Os seus projetos e exportações estão em:\n{destino}\n\n({e})")
+
+    def abrir_projetos_recentes_dialog(self):
+        recentes = []
+        if RECENTES_PATH.exists():
+            try:
+                with open(RECENTES_PATH, "r", encoding="utf-8") as f:
+                    recentes = json.load(f)
+            except Exception:
+                recentes = []
+
+        validos = [r for r in recentes if r.get("projeto") and os.path.exists(r["projeto"])]
+        if not validos:
+            QMessageBox.information(self, "Projetos Recentes", "Ainda não existem projetos guardados recentemente.")
+            return
+
+        opcoes = [
+            f"{r.get('nome')}  |  {r.get('modalidade', '').upper()}  |  {r.get('atualizado_em', '')}"
+            for r in validos
+        ]
+        escolha, ok = QInputDialog.getItem(self, "Projetos Recentes — KRONOS PRO", "Escolha um projeto para abrir:", opcoes, 0, False)
+        if ok and escolha:
+            idx = opcoes.index(escolha)
+            self._carregar_dados_projeto(validos[idx]["projeto"])
+
+    def _carregar_dados_projeto(self, caminho):
+        with open(caminho, "r", encoding="utf-8") as f:
+            dados = json.load(f)
+
+        mod_s = dados.get("modalidade_atual")
+        if mod_s in ("futebol", "voleibol", "basquetebol", "andebol"):
+            self.modalidade_atual = mod_s
+            if hasattr(self, "combo_modalidade"):
+                idx_m = self.combo_modalidade.findData(mod_s)
+                if idx_m >= 0:
+                    self.combo_modalidade.blockSignals(True)
+                    self.combo_modalidade.setCurrentIndex(idx_m)
+                    self.combo_modalidade.blockSignals(False)
+
+        if "layout_items" in dados:
+            self.layout_items = dados["layout_items"]
+            self.campo_oculto = not any(it.get("tipo") == "minicampo" for it in self.layout_items)
+            if hasattr(self, "freeform_canvas"):
+                self.freeform_canvas.reconstruir_widgets()
+            self.sincronizar_estruturas_desde_canvas()
+
+        self.eventos_registados = dados.get("eventos_registados", [])
+        self.studio_clips = dados.get("studio_clips", [])
+        self.projeto_atual_path = str(caminho)
+        self.registar_projeto_recente(self.projeto_atual_path)
+
+        vid = dados.get("caminho_video", "")
+        if vid and os.path.exists(vid):
+            self.caminho_video = vid
+            self.iniciar_video()
+        elif vid:
+            self.caminho_video = vid
+            resp = QMessageBox.question(
+                self,
+                "Vídeo Não Encontrado",
+                f"O vídeo original não foi encontrado no caminho guardado:\n{vid}\n\nDeseja localizar o ficheiro de vídeo agora?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if resp == QMessageBox.StandardButton.Yes:
+                self.escolher_ficheiro_video()
+
+        self.atualizar_dashboard()
+        self.atualizar_lista_ui_estudio()
+        self.timeline_widget.update()
+
+    def guardar_autosave(self):
+        try:
+            dados = {
+                "modalidade_atual": getattr(self, "modalidade_atual", "futebol"),
+                "caminho_video": self.caminho_video,
+                "eventos_registados": self.eventos_registados,
+                "studio_clips": self.studio_clips,
+            }
+            with open(AUTOSAVE_PATH, "w", encoding="utf-8") as f:
+                json.dump(dados, f, ensure_ascii=False, indent=2)
+            self.alteracoes_por_guardar = True
+        except Exception as e:
+            print(f"Erro no auto-save: {e}")
+
+    def verificar_recuperacao(self):
+        if not AUTOSAVE_PATH.exists():
+            return
+        try:
+            with open(AUTOSAVE_PATH, "r", encoding="utf-8") as f:
+                dados = json.load(f)
+        except Exception:
+            return
+
+        evs = dados.get("eventos_registados", [])
+        if not evs and not dados.get("studio_clips"):
+            return
+
+        resposta = QMessageBox.question(
+            self,
+            "Recuperar Sessão Anterior",
+            f"Foi encontrada uma sessão não guardada com {len(evs)} corte(s).\n\nDeseja recuperar estes dados agora?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if resposta == QMessageBox.StandardButton.Yes:
+            mod_s = dados.get("modalidade_atual")
+            if mod_s in ("futebol", "voleibol", "basquetebol", "andebol") and mod_s != self.modalidade_atual:
+                idx_m = self.combo_modalidade.findData(mod_s)
+                if idx_m >= 0:
+                    self.combo_modalidade.setCurrentIndex(idx_m)
+            self.eventos_registados = evs
+            self.studio_clips = dados.get("studio_clips", [])
+            if dados.get("caminho_video") and not self.caminho_video:
+                self.caminho_video = dados["caminho_video"]
+            self.alteracoes_por_guardar = True
+            self.atualizar_dashboard()
+            self.atualizar_lista_ui_estudio()
+            self.timeline_widget.update()
+        else:
+            self.limpar_autosave()
+
+    def limpar_autosave(self):
+        self.alteracoes_por_guardar = False
+        if AUTOSAVE_PATH.exists():
+            try:
+                AUTOSAVE_PATH.unlink()
+            except Exception:
+                pass
+
+    def closeEvent(self, event):
+        if getattr(self, "alteracoes_por_guardar", False) and (
+            len(self.eventos_registados) > 0 or len(self.studio_clips) > 0
+        ):
+            resposta = QMessageBox.question(
+                self,
+                "Sair do KRONOS PRO",
+                "Existem cortes ou alterações por guardar/exportar.\n\nTem a certeza de que pretende fechar a aplicação?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if resposta == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+        event.accept()
 
 
 if __name__ == "__main__":
